@@ -7,7 +7,24 @@
       },
       "disabled": false,
       "autoApprove": [],
-      "timeout": 300
+      "timeout": 300,
+      "description": "Sleep MCP Server with blocking and non-blocking sleep operations",
+      "features": [
+        "Non-blocking sleep operations with operation tracking",
+        "Blocking sleep operations for synchronous workflows", 
+        "Sleep until specific timestamps",
+        "Operation status monitoring and progress tracking",
+        "Individual and bulk operation cancellation",
+        "Concurrent operation management"
+      ],
+      "tools": [
+        "sleep - Non-blocking sleep with operation ID",
+        "sleep_blocking - Blocking sleep that waits for completion",
+        "sleep_until - Sleep until specific timestamp",
+        "get_sleep_status - Check operation status and progress",
+        "cancel_operation - Cancel specific operation by ID",
+        "cancel_sleep - Cancel all active operations"
+      ]
     }
   }
 }

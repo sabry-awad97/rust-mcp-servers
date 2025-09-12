@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use crate::core::{
     error::{SleepServerError, SleepServerResult},
-    models::{EnhancedSleepStatus, OperationStatus, SleepStartResponse},
+    models::{EnhancedSleepStatus, OperationStatus, SleepResult, SleepStartResponse},
     task_manager::TaskManager,
     utils::{format_duration, parse_duration, parse_iso8601},
 };
@@ -145,6 +145,30 @@ impl SleepServer {
     pub async fn cancel_all_operations(&self) -> usize {
         self.task_manager.cancel_all_operations().await
     }
+
+    /// Blocking sleep for a specified duration
+    pub async fn sleep_blocking(
+        &self,
+        duration_str: &str,
+        message: Option<String>,
+    ) -> SleepServerResult<SleepResult> {
+        let duration = parse_duration(duration_str)?;
+        let start_time = Utc::now();
+
+        // Perform the actual blocking sleep
+        tokio::time::sleep(duration).await;
+
+        let end_time = Utc::now();
+
+        Ok(SleepResult {
+            duration_ms: duration.as_millis() as u64,
+            duration_str: format_duration(duration),
+            start_time: start_time.to_rfc3339(),
+            end_time: end_time.to_rfc3339(),
+            completed: true,
+            message,
+        })
+    }
 }
 
 impl Default for SleepServer {
@@ -249,5 +273,23 @@ mod tests {
         // Cancel the sleep
         let result = server.cancel_all_operations().await;
         assert!(result > 0);
+    }
+
+    #[tokio::test]
+    async fn test_sleep_blocking() {
+        let server = SleepServer::new();
+
+        let start_time = std::time::Instant::now();
+        let result = server
+            .sleep_blocking("100ms", Some("Blocking test".to_string()))
+            .await;
+        let elapsed = start_time.elapsed();
+
+        assert!(result.is_ok());
+        let sleep_result = result.unwrap();
+        assert_eq!(sleep_result.duration_ms, 100);
+        assert!(sleep_result.completed);
+        assert_eq!(sleep_result.message, Some("Blocking test".to_string()));
+        assert!(elapsed.as_millis() >= 100); // Should have actually waited
     }
 }

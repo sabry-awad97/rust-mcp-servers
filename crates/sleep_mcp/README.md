@@ -5,16 +5,18 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Build Status](https://github.com/sabry-awad97/rust-mcp-servers/workflows/CI/badge.svg)](https://github.com/sabry-awad97/rust-mcp-servers/actions)
 
-A comprehensive **Model Context Protocol (MCP) server** that provides sleep and delay operations for testing, automation, and workflow control with precise timing, status tracking, and cancellation capabilities.
+A comprehensive **Model Context Protocol (MCP) server** that provides both blocking and non-blocking sleep operations for testing, automation, and workflow control with precise timing, concurrent operation management, and advanced cancellation capabilities.
 
 ## ✨ Features
 
-- ⏰ **Duration-based Sleep** - Sleep for specified durations (ms, s, m, h)
+- ⏰ **Dual Sleep Modes** - Both blocking and non-blocking sleep operations
+- 🔄 **Concurrent Operations** - Manage multiple sleep operations simultaneously
 - 🎯 **Time-based Sleep** - Sleep until specific ISO 8601 timestamps
-- 📊 **Real-time Progress** - Monitor active operations with progress reporting
-- ❌ **Cancellation Support** - Cancel ongoing sleep operations gracefully
+- 📊 **Real-time Progress** - Monitor active operations with detailed progress reporting
+- 🆔 **Operation Tracking** - Unique operation IDs for precise management
+- ❌ **Advanced Cancellation** - Cancel individual operations or all at once
 - 🛡️ **Safety Limits** - Built-in limits (max 30 minutes per operation)
-- 🔍 **Status Tracking** - Detailed status information and timing data
+- 🔍 **Enhanced Status** - Comprehensive status information with operation details
 - 🧹 **Input Validation** - Comprehensive error handling and input sanitization
 - 📚 **Rich Documentation** - Built-in help and usage examples
 
@@ -56,9 +58,9 @@ Add to your Claude Desktop MCP configuration:
 
 ## 🛠️ Available Tools
 
-### `sleep`
+### `sleep` (Non-blocking)
 
-Sleep for a specified duration with flexible format support.
+Sleep for a specified duration with flexible format support. Returns immediately with an operation ID for tracking.
 
 **Parameters:**
 
@@ -78,12 +80,42 @@ Sleep for a specified duration with flexible format support.
 
 ```json
 {
-  "success": true,
-  "duration": "30s",
+  "operation_id": "abc123-def456-789",
+  "message": "Sleep operation started",
+  "duration_ms": 30000,
+  "duration_str": "30s",
+  "expected_completion": "2025-01-15T14:00:30Z"
+}
+```
+
+### `sleep_blocking` (Blocking)
+
+Sleep for a specified duration and wait for completion before returning results.
+
+**Parameters:**
+
+- `duration` (string): Duration to sleep (e.g., "5s", "2m", "500ms")
+- `message` (string, optional): Custom message to display during sleep
+
+**Example Request:**
+
+```json
+{
+  "duration": "5s",
+  "message": "Synchronous wait"
+}
+```
+
+**Example Response:**
+
+```json
+{
+  "duration_ms": 5000,
+  "duration_str": "5s",
   "start_time": "2025-01-15T14:00:00Z",
-  "end_time": "2025-01-15T14:00:30Z",
-  "message": "Sleep completed successfully",
-  "elapsed": "30.001s"
+  "end_time": "2025-01-15T14:00:05Z",
+  "completed": true,
+  "message": "Synchronous wait"
 }
 ```
 
@@ -120,17 +152,19 @@ Sleep until a specific timestamp with ISO 8601 support.
 
 ### `get_sleep_status`
 
-Get real-time status and progress of the current sleep operation.
+Get real-time status and progress of sleep operations with support for querying specific operations.
 
 **Parameters:**
 
 - `detailed` (boolean, optional): Include detailed timing information (default: false)
+- `operation_id` (string, optional): Query specific operation by ID
 
 **Example Request:**
 
 ```json
 {
-  "detailed": true
+  "detailed": true,
+  "operation_id": "abc123-def456-789"
 }
 ```
 
@@ -138,20 +172,58 @@ Get real-time status and progress of the current sleep operation.
 
 ```json
 {
-  "active": true,
-  "duration": "2m",
-  "elapsed": "45.2s",
-  "remaining": "1m 14.8s",
-  "progress": 37.67,
-  "start_time": "2025-01-15T14:00:00Z",
-  "estimated_end": "2025-01-15T14:02:00Z",
-  "message": "Processing data..."
+  "is_sleeping": true,
+  "active_operations": 2,
+  "operations": [
+    {
+      "operation_id": "abc123-def456-789",
+      "status": "Running",
+      "duration_ms": 120000,
+      "duration_str": "2m",
+      "start_time": "2025-01-15T14:00:00Z",
+      "expected_end_time": "2025-01-15T14:02:00Z",
+      "progress_percent": 37.67,
+      "remaining_ms": 74800,
+      "message": "Processing data..."
+    }
+  ],
+  "current_operation": {
+    "operation_id": "abc123-def456-789",
+    "status": "Running",
+    "progress_percent": 37.67
+  }
+}
+```
+
+### `cancel_operation`
+
+Cancel a specific sleep operation by its operation ID.
+
+**Parameters:**
+
+- `operation_id` (string): The operation ID to cancel
+
+**Example Request:**
+
+```json
+{
+  "operation_id": "abc123-def456-789"
+}
+```
+
+**Example Response:**
+
+```json
+{
+  "success": true,
+  "message": "Operation abc123-def456-789 cancelled successfully",
+  "operation_id": "abc123-def456-789"
 }
 ```
 
 ### `cancel_sleep`
 
-Cancel the current sleep operation gracefully.
+Cancel all active sleep operations gracefully.
 
 **Parameters:** None
 
@@ -166,9 +238,8 @@ Cancel the current sleep operation gracefully.
 ```json
 {
   "success": true,
-  "message": "Sleep operation cancelled",
-  "elapsed": "23.4s",
-  "was_active": true
+  "message": "2 sleep operations cancelled",
+  "cancelled_count": 2
 }
 ```
 
@@ -213,11 +284,17 @@ The server automatically handles timing and provides configurable safety limits.
 
 Once configured, you can ask Claude:
 
-> "Sleep for 30 seconds while waiting for the deployment"
+> "Sleep for 30 seconds while waiting for the deployment" (non-blocking)
+
+> "Do a blocking sleep for 5 seconds and wait for completion"
 
 > "Sleep until 2 PM UTC for the scheduled maintenance window"
 
-> "What's the status of the current sleep operation?"
+> "What's the status of all sleep operations?"
+
+> "Cancel operation abc123-def456"
+
+> "Cancel all active sleep operations"
 
 ### With MCP Inspector
 
@@ -225,9 +302,18 @@ Once configured, you can ask Claude:
 # Test sleep operation
 npx @modelcontextprotocol/inspector mcp-server-sleep
 
-# Then use the tool:
-# Tool: sleep
-# Parameters: {"duration": "10s", "message": "Testing sleep"}
+# Then use the tools:
+# Tool: sleep (non-blocking)
+# Parameters: {"duration": "10s", "message": "Testing non-blocking sleep"}
+
+# Tool: sleep_blocking (blocking)
+# Parameters: {"duration": "5s", "message": "Testing blocking sleep"}
+
+# Tool: get_sleep_status
+# Parameters: {"detailed": true}
+
+# Tool: cancel_operation
+# Parameters: {"operation_id": "operation-id-here"}
 ```
 
 ### Command Line Testing

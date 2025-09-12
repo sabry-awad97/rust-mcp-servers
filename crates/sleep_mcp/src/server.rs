@@ -12,7 +12,7 @@ use rmcp::{
 use crate::core::provider::SleepServer;
 use crate::core::{
     error::McpResult,
-    models::{GetStatusRequest, SleepRequest, SleepUntilRequest},
+    models::{CancelOperationRequest, GetStatusRequest, SleepRequest, SleepUntilRequest},
 };
 
 /// Available resource URIs for the Sleep MCP Server
@@ -93,36 +93,39 @@ Capabilities:
     fn generate_help_content(&self) -> String {
         r#"Sleep MCP Server Help
 
-NON-BLOCKING TOOLS (Returns immediately with operation ID):
-- sleep: Start a background sleep operation (returns immediately)
-  - duration: Duration string (required) - e.g., "1s", "500ms", "2m", "1h"
-  - message: Optional message to include in result
-  - Returns: operation_id for tracking
-  - Example: {"duration": "30s", "message": "Background processing"}
+## Available Tools
 
-- sleep_until: Start a background sleep until operation (returns immediately)
-  - target_time: ISO 8601 timestamp (required) - e.g., "2025-01-15T14:30:00Z"
-  - message: Optional message to include in result
-  - Returns: operation_id for tracking
-  - Example: {"target_time": "2025-01-15T14:30:00Z", "message": "Scheduled maintenance"}
+1. **sleep** - Start a non-blocking sleep operation
+   - Parameters: `duration` (string), `message` (optional string)
+   - Returns: Operation ID and expected completion time
+   - Example: `{"duration": "5s", "message": "Taking a break"}`
 
-STATUS AND CONTROL TOOLS:
-- get_sleep_status: Get comprehensive status of all operations
-  - operation_id: Check specific operation (optional)
-  - detailed: Include detailed timing information (optional, default: false)
-  - Example: {"operation_id": "uuid-here", "detailed": true}
+2. **sleep_blocking** - Sleep for a specified duration (blocking operation)
+   - Parameters: `duration` (string), `message` (optional string)
+   - Returns: Sleep result with completion details
+   - Example: `{"duration": "2s", "message": "Blocking sleep"}`
 
-- cancel_sleep: Cancel all active sleep operations
-  - No parameters required
-  - Example: {}
+3. **sleep_until** - Sleep until a specific time (non-blocking)
+   - Parameters: `target_time` (ISO 8601 string), `message` (optional string)
+   - Returns: Operation ID and expected completion time
+   - Example: `{"target_time": "2024-01-01T12:00:00Z"}`
 
-- cancel_operation: Cancel a specific background operation
-  - operation_id: ID of operation to cancel (required)
-  - Example: {"operation_id": "uuid-here"}
+4. **get_sleep_status** - Get status of sleep operations
+   - Parameters: `operation_id` (optional string), `detailed` (optional boolean)
+   - Returns: Current status of operations
+   - Example: `{"operation_id": "abc123", "detailed": true}`
 
-- cancel_all: Cancel all active background operations
-  - No parameters required
-  - Example: {}
+5. **cancel_sleep** - Cancel all active sleep operations
+   - Parameters: None
+   - Returns: Number of operations cancelled
+
+6. **cancel_operation** - Cancel a specific sleep operation
+   - Parameters: `operation_id` (string)
+   - Returns: Cancellation status
+
+7. **cancel_all** - Cancel all active operations (alias for cancel_sleep)
+   - Parameters: None
+   - Returns: Number of operations cancelled
 
 RESOURCES:
 - sleep://status: Current server status and active operations
@@ -358,23 +361,37 @@ impl SleepService {
         )]))
     }
 
+    #[tool(
+        description = "Sleep for a specified duration (blocking operation that waits for completion)"
+    )]
+    async fn sleep_blocking(
+        &self,
+        Parameters(req): Parameters<SleepRequest>,
+    ) -> McpResult<CallToolResult> {
+        let result = self
+            .sleep_server
+            .sleep_blocking(&req.duration, req.message)
+            .await?;
+
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&result).unwrap(),
+        )]))
+    }
+
     #[tool(description = "Cancel a specific background operation by ID")]
     async fn cancel_operation(
         &self,
-        Parameters(req): Parameters<serde_json::Value>,
+        Parameters(req): Parameters<CancelOperationRequest>,
     ) -> McpResult<CallToolResult> {
-        let operation_id = req
-            .get("operation_id")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| crate::core::error::SleepServerError::InvalidDuration {
-                duration: "operation_id parameter is required".to_string(),
-            })?;
+        let result = self
+            .sleep_server
+            .cancel_operation(&req.operation_id)
+            .await?;
 
-        let result = self.sleep_server.cancel_operation(operation_id).await?;
         Ok(CallToolResult::success(vec![Content::text(
             serde_json::to_string_pretty(&serde_json::json!({
                 "cancelled": result,
-                "operation_id": operation_id
+                "operation_id": req.operation_id
             }))
             .unwrap(),
         )]))

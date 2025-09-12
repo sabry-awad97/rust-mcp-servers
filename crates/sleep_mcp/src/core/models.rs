@@ -27,25 +27,6 @@ pub struct SleepResult {
     pub message: Option<String>,
 }
 
-/// Sleep status information
-#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct SleepStatus {
-    /// Whether a sleep operation is currently active
-    pub is_sleeping: bool,
-    /// Current sleep duration in milliseconds (if sleeping)
-    pub current_duration_ms: Option<u64>,
-    /// Sleep start time (if sleeping)
-    pub start_time: Option<String>,
-    /// Expected end time (if sleeping)
-    pub expected_end_time: Option<String>,
-    /// Progress percentage (0-100, if sleeping)
-    pub progress_percent: Option<f64>,
-    /// Time remaining in milliseconds (if sleeping)
-    pub remaining_ms: Option<u64>,
-    /// Optional message associated with the sleep operation
-    pub message: Option<String>,
-}
-
 /// Request to sleep for a specific duration
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct SleepRequest {
@@ -76,6 +57,13 @@ pub struct GetStatusRequest {
     pub detailed: bool,
     /// Optional operation ID to check specific operation
     pub operation_id: Option<String>,
+}
+
+/// Request to cancel a specific operation
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct CancelOperationRequest {
+    /// Operation ID to cancel
+    pub operation_id: String,
 }
 
 /// Operation status enumeration
@@ -166,22 +154,5 @@ mod tests {
 
         assert_eq!(request.target_time, "2025-01-15T14:30:00Z");
         assert_eq!(request.message, None);
-    }
-
-    #[test]
-    fn test_sleep_status_serialization() {
-        let status = SleepStatus {
-            is_sleeping: true,
-            current_duration_ms: Some(5000),
-            start_time: Some("2025-01-15T14:30:00Z".to_string()),
-            expected_end_time: Some("2025-01-15T14:30:05Z".to_string()),
-            progress_percent: Some(50.0),
-            remaining_ms: Some(2500),
-            message: Some("Test message".to_string()),
-        };
-
-        let json = serde_json::to_string(&status).unwrap();
-        assert!(json.contains("is_sleeping"));
-        assert!(json.contains("50.0"));
     }
 }

@@ -39,8 +39,15 @@ Once configured, you can have natural conversations with Claude:
 
 **User:** "Sleep for 30 seconds while waiting for the deployment"
 
-**Claude:** I'll start a 30-second sleep operation for you.
+**Claude:** I'll start a 30-second non-blocking sleep operation for you.
 _[Uses sleep tool with duration: "30s", message: "Waiting for deployment"]_
+Returns operation ID for tracking progress.
+
+**User:** "Do a blocking sleep for 5 seconds"
+
+**Claude:** I'll perform a blocking 5-second sleep that waits for completion.
+_[Uses sleep_blocking tool with duration: "5s", message: "Blocking sleep"]_
+Returns completion details after the sleep finishes.
 
 **User:** "Sleep until 2 PM UTC for the scheduled maintenance window"
 
@@ -52,9 +59,14 @@ _[Uses sleep_until tool with target_time: "2024-01-15T14:00:00Z", message: "Sche
 **Claude:** Let me check the current sleep operation status for you.
 _[Uses get_sleep_status tool with detailed: true]_
 
-**User:** "Cancel the current sleep operation"
+**User:** "Cancel operation abc123-def456"
 
-**Claude:** I'll cancel the current sleep operation.
+**Claude:** I'll cancel the specific sleep operation.
+_[Uses cancel_operation tool with operation_id: "abc123-def456"]_
+
+**User:** "Cancel all sleep operations"
+
+**Claude:** I'll cancel all active sleep operations.
 _[Uses cancel_sleep tool]_
 
 ## MCP Inspector Testing
@@ -71,14 +83,26 @@ npx @modelcontextprotocol/inspector mcp-server-sleep
 
 ### Test Tools
 
-#### Sleep for Duration
+#### Sleep for Duration (Non-blocking)
 
 ```json
 {
   "name": "sleep",
   "arguments": {
     "duration": "10s",
-    "message": "Testing sleep functionality"
+    "message": "Testing non-blocking sleep functionality"
+  }
+}
+```
+
+#### Sleep for Duration (Blocking)
+
+```json
+{
+  "name": "sleep_blocking",
+  "arguments": {
+    "duration": "5s",
+    "message": "Testing blocking sleep functionality"
   }
 }
 ```
@@ -101,12 +125,24 @@ npx @modelcontextprotocol/inspector mcp-server-sleep
 {
   "name": "get_sleep_status",
   "arguments": {
-    "detailed": true
+    "detailed": true,
+    "operation_id": "optional-operation-id"
   }
 }
 ```
 
-#### Cancel Sleep
+#### Cancel Specific Operation
+
+```json
+{
+  "name": "cancel_operation",
+  "arguments": {
+    "operation_id": "abc123-def456-789"
+  }
+}
+```
+
+#### Cancel All Sleep Operations
 
 ```json
 {
@@ -142,11 +178,11 @@ echo '{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "sl
 ### Test Automation
 
 ```bash
-# Add delay between test steps
+# Add non-blocking delay between test steps
 echo '{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "sleep", "arguments": {"duration": "2s", "message": "Waiting for UI to load"}}}' | mcp-server-sleep
 
-# Wait for service startup
-echo '{"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "sleep", "arguments": {"duration": "30s", "message": "Service startup delay"}}}' | mcp-server-sleep
+# Blocking wait for service startup
+echo '{"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "sleep_blocking", "arguments": {"duration": "30s", "message": "Service startup delay"}}}' | mcp-server-sleep
 ```
 
 ### Deployment Automation

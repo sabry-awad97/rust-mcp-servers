@@ -2,20 +2,39 @@
   "description": "MCP Client Examples for Sleep Server",
   "tools": {
     "sleep": {
-      "description": "Sleep for a specified duration",
+      "description": "Sleep for a specified duration (non-blocking, returns operation ID)",
       "examples": [
         {
-          "name": "Basic Sleep",
+          "name": "Basic Non-blocking Sleep",
           "arguments": {
             "duration": "10s",
             "message": "Processing data"
           }
         },
         {
-          "name": "Long Sleep with Progress",
+          "name": "Long Sleep with Progress Tracking",
           "arguments": {
             "duration": "2m",
             "message": "Waiting for deployment"
+          }
+        }
+      ]
+    },
+    "sleep_blocking": {
+      "description": "Sleep for a specified duration (blocking, waits for completion)",
+      "examples": [
+        {
+          "name": "Blocking Sleep",
+          "arguments": {
+            "duration": "5s",
+            "message": "Synchronous wait"
+          }
+        },
+        {
+          "name": "Service Startup Wait",
+          "arguments": {
+            "duration": "30s",
+            "message": "Waiting for service to start"
           }
         }
       ]
@@ -44,21 +63,41 @@
       "examples": [
         {
           "name": "Basic Status",
-          "arguments": {}
+          "arguments": {
+            "detailed": false
+          }
         },
         {
           "name": "Detailed Status",
           "arguments": {
             "detailed": true
           }
+        },
+        {
+          "name": "Specific Operation Status",
+          "arguments": {
+            "detailed": true,
+            "operation_id": "abc123-def456-789"
+          }
+        }
+      ]
+    },
+    "cancel_operation": {
+      "description": "Cancel a specific operation by ID",
+      "examples": [
+        {
+          "name": "Cancel Specific Operation",
+          "arguments": {
+            "operation_id": "abc123-def456-789"
+          }
         }
       ]
     },
     "cancel_sleep": {
-      "description": "Cancel current operation",
+      "description": "Cancel all active operations",
       "examples": [
         {
-          "name": "Cancel Operation",
+          "name": "Cancel All Operations",
           "arguments": {}
         }
       ]
@@ -70,8 +109,8 @@
     "sleep://examples": "Usage examples and patterns"
   },
   "common_patterns": {
-    "test_automation": {
-      "description": "Add delays between test steps",
+    "test_automation_non_blocking": {
+      "description": "Add non-blocking delays between test steps",
       "example": {
         "tool": "sleep",
         "arguments": {
@@ -80,8 +119,18 @@
         }
       }
     },
+    "test_automation_blocking": {
+      "description": "Add blocking delays for synchronous test steps",
+      "example": {
+        "tool": "sleep_blocking",
+        "arguments": {
+          "duration": "5s",
+          "message": "Waiting for service startup"
+        }
+      }
+    },
     "rate_limiting": {
-      "description": "Control API request frequency",
+      "description": "Control API request frequency with non-blocking sleep",
       "example": {
         "tool": "sleep",
         "arguments": {
@@ -99,6 +148,25 @@
           "message": "Daily backup window"
         }
       }
+    },
+    "operation_management": {
+      "description": "Track and manage multiple concurrent operations",
+      "examples": [
+        {
+          "description": "Check status of all operations",
+          "tool": "get_sleep_status",
+          "arguments": {
+            "detailed": true
+          }
+        },
+        {
+          "description": "Cancel specific operation",
+          "tool": "cancel_operation",
+          "arguments": {
+            "operation_id": "operation-id-here"
+          }
+        }
+      ]
     }
   }
 }
