@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "time": {
+      "command": "mcp-server-time",
+      "args": [],
+      "env": {
+        "RUST_LOG": "info"
+      }
+    }
+  }
+}

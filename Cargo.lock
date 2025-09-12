@@ -369,7 +369,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "mcp_server_time"
+name = "mcp-server-time"
 version = "0.1.0"
 dependencies = [
  "chrono",

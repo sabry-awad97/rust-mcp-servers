@@ -1,10 +1,20 @@
 [package]
-name = "mcp_server_time"
+name = "mcp-server-time"
 version = "0.1.0"
 edition = "2024"
+authors = ["Sabry Awad <sabry.awad97@gmail.com>"]
+description = "A comprehensive Model Context Protocol (MCP) server for timezone-aware time operations"
+documentation = "https://docs.rs/mcp-server-time"
+readme = "README.md"
+homepage = "https://github.com/sabry-awad97/rust-mcp-servers"
+repository = "https://github.com/sabry-awad97/rust-mcp-servers"
+license = "MIT"
+keywords = ["mcp", "timezone", "time", "server", "protocol"]
+categories = ["date-and-time", "web-programming", "command-line-utilities"]
+exclude = ["target/", "*.log", ".env"]
 
 [[bin]]
-name = "mcp_server_time"
+name = "mcp-server-time"
 path = "src/main.rs"
 
 [dependencies]
