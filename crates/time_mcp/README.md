@@ -76,7 +76,7 @@ Get the current time in any IANA timezone.
 ```json
 {
   "timezone": "Asia/Tokyo",
-  "datetime": "2024-01-15T14:30:00+09:00",
+  "datetime": "2025-01-15T14:30:00+09:00",
   "day_of_week": "Monday",
   "is_dst": false
 }
@@ -108,13 +108,13 @@ Convert time between different timezones.
 {
   "source": {
     "timezone": "America/Los_Angeles",
-    "datetime": "2024-01-15T09:00:00-08:00",
+    "datetime": "2025-01-15T09:00:00-08:00",
     "day_of_week": "Monday",
     "is_dst": false
   },
   "target": {
     "timezone": "Europe/Paris",
-    "datetime": "2024-01-15T18:00:00+01:00",
+    "datetime": "2025-01-15T18:00:00+01:00",
     "day_of_week": "Monday",
     "is_dst": false
   },

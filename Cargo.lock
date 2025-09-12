@@ -369,12 +369,39 @@ dependencies = [
 ]
 
 [[package]]
+name = "mcp-server-sleep"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "rmcp",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "mcp-server-time"
 version = "0.1.0"
 dependencies = [
  "chrono",
  "chrono-tz",
  "iana-time-zone",
+ "rmcp",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "mcp_server_filesystem"
+version = "0.1.0"
+dependencies = [
  "rmcp",
  "serde",
  "serde_json",

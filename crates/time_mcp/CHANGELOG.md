@@ -48,6 +48,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Communicates via stdio for integration with MCP clients
 - Comprehensive test suite with 14+ test cases
 - Follows Rust best practices and SOLID principles
-
-[Unreleased]: https://github.com/sabry-awad97/rust-mcp-servers/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/sabry-awad97/rust-mcp-servers/releases/tag/v0.1.0

@@ -1,0 +1,104 @@
+{
+  "description": "MCP Client Examples for Sleep Server",
+  "tools": {
+    "sleep": {
+      "description": "Sleep for a specified duration",
+      "examples": [
+        {
+          "name": "Basic Sleep",
+          "arguments": {
+            "duration": "10s",
+            "message": "Processing data"
+          }
+        },
+        {
+          "name": "Long Sleep with Progress",
+          "arguments": {
+            "duration": "2m",
+            "message": "Waiting for deployment"
+          }
+        }
+      ]
+    },
+    "sleep_until": {
+      "description": "Sleep until a specific timestamp",
+      "examples": [
+        {
+          "name": "Scheduled Maintenance",
+          "arguments": {
+            "target_time": "2025-01-15T02:00:00Z",
+            "message": "Maintenance window"
+          }
+        },
+        {
+          "name": "Meeting Time",
+          "arguments": {
+            "target_time": "2025-01-15T14:30:00Z",
+            "message": "Team meeting"
+          }
+        }
+      ]
+    },
+    "get_sleep_status": {
+      "description": "Get current operation status",
+      "examples": [
+        {
+          "name": "Basic Status",
+          "arguments": {}
+        },
+        {
+          "name": "Detailed Status",
+          "arguments": {
+            "detailed": true
+          }
+        }
+      ]
+    },
+    "cancel_sleep": {
+      "description": "Cancel current operation",
+      "examples": [
+        {
+          "name": "Cancel Operation",
+          "arguments": {}
+        }
+      ]
+    }
+  },
+  "resources": {
+    "sleep://status": "Server and operation status",
+    "sleep://help": "Comprehensive help documentation",
+    "sleep://examples": "Usage examples and patterns"
+  },
+  "common_patterns": {
+    "test_automation": {
+      "description": "Add delays between test steps",
+      "example": {
+        "tool": "sleep",
+        "arguments": {
+          "duration": "2s",
+          "message": "Waiting for UI to load"
+        }
+      }
+    },
+    "rate_limiting": {
+      "description": "Control API request frequency",
+      "example": {
+        "tool": "sleep",
+        "arguments": {
+          "duration": "1s",
+          "message": "Rate limit delay"
+        }
+      }
+    },
+    "scheduled_tasks": {
+      "description": "Wait until specific time",
+      "example": {
+        "tool": "sleep_until",
+        "arguments": {
+          "target_time": "2025-01-15T03:00:00Z",
+          "message": "Daily backup window"
+        }
+      }
+    }
+  }
+}

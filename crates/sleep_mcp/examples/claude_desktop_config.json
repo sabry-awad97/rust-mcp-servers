@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "sleep": {
+      "command": "mcp-server-sleep",
+      "env": {
+        "RUST_LOG": "info"
+      },
+      "disabled": false,
+      "autoApprove": [],
+      "timeout": 300
+    }
+  }
+}

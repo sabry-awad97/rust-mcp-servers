@@ -86,7 +86,7 @@ mod tests {
     fn test_time_result_serialization() {
         let time_result = TimeResult {
             timezone: "UTC".to_string(),
-            datetime: "2024-01-01T12:00:00+00:00".to_string(),
+            datetime: "2025-01-01T12:00:00+00:00".to_string(),
             day_of_week: "Monday".to_string(),
             is_dst: false,
         };
