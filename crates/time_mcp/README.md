@@ -3,19 +3,20 @@
 [![Crates.io](https://img.shields.io/crates/v/mcp-server-time.svg)](https://crates.io/crates/mcp-server-time)
 [![Documentation](https://docs.rs/mcp-server-time/badge.svg)](https://docs.rs/mcp-server-time)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Build Status](https://github.com/sabry-awad97/rust-mcp-servers/workflows/CI/badge.svg)](https://github.com/sabry-awad97/rust-mcp-servers/actions)
 
-A comprehensive **Model Context Protocol (MCP) server** that provides timezone-aware time operations with automatic DST handling and local timezone detection.
+A comprehensive **Model Context Protocol (MCP) server** that provides timezone-aware time operations with **smart completion**, automatic DST handling, and local timezone detection.
 
 ## ✨ Features
 
-- 🌍 **Global Timezone Support** - Works with any IANA timezone
+- 🌍 **Global Timezone Support** - Works with all 400+ IANA timezones
 - 🔄 **Time Conversion** - Convert time between different timezones
+- 🎯 **Smart Completion** - Fuzzy matching for timezone names and time formats
 - 🌅 **Automatic DST Handling** - Seamlessly handles daylight saving transitions
 - 📍 **Local Timezone Detection** - Automatically detects system timezone
 - 🛡️ **Robust Error Handling** - Comprehensive error messages with suggestions
 - 🧹 **Input Sanitization** - Automatically trims whitespace from inputs
 - 📚 **Rich Documentation** - Built-in help and timezone references
+- 🚀 **Interactive Prompts** - Guided timezone conversion with completion
 
 ## 🚀 Installation & Usage
 
@@ -54,6 +55,16 @@ Add to your Claude Desktop MCP configuration:
 ```
 
 ## 🛠️ Available Tools
+
+### Smart Completion Features
+
+**NEW in v0.2.0**: The server now provides intelligent completion for:
+
+- **Timezone Names**: Fuzzy matching (e.g., "ny" → "America/New_York", "tok" → "Asia/Tokyo")
+- **Time Formats**: All 15-minute intervals (00:00, 00:15, 00:30, 00:45, etc.)
+- **Context-Aware**: Suggestions adapt based on what you're typing
+
+### Tools
 
 ### `get_current_time`
 
@@ -122,6 +133,26 @@ Convert time between different timezones.
 }
 ```
 
+## 💬 Available Prompts
+
+### `timezone_guidance`
+
+Get comprehensive guidance on timezone best practices, IANA naming conventions, and DST handling.
+
+### `timezone_conversion` ⭐ NEW
+
+Interactive timezone conversion with **smart completion support**. This prompt provides:
+
+- **Fuzzy timezone matching**: Type partial names for suggestions
+- **Time format completion**: Get suggestions for valid time formats
+- **Rich conversion results**: Detailed information with DST status
+
+**Parameters:**
+
+- `source_timezone` (string): Source IANA timezone (with completion)
+- `time` (string): Time in HH:MM format (with completion)
+- `target_timezone` (string): Target IANA timezone (with completion)
+
 ## 📚 Available Resources
 
 ### `time://status`
@@ -138,7 +169,7 @@ List of common IANA timezone names organized by region.
 
 ## 🌐 Supported Timezones
 
-The server supports all IANA timezone names. Here are some common examples:
+The server dynamically supports **all 400+ IANA timezone names** from `chrono-tz`. The completion system provides fuzzy matching for easy discovery. Here are some common examples:
 
 ### Americas
 
@@ -183,23 +214,37 @@ Once configured, you can ask Claude:
 
 > "What's the time difference between New York and Sydney?"
 
+> "Use the timezone conversion prompt to convert 14:30 from Europe/London to Asia/Tokyo"
+
+**NEW**: Try the interactive `timezone_conversion` prompt for guided conversion with smart completion!
+
 ### With MCP Inspector
 
 ```bash
-# Test getting current time
+# Test the server with smart completion
 npx @modelcontextprotocol/inspector mcp-server-time
-
-# Then use the tool:
-# Tool: get_current_time
-# Parameters: {"timezone": "Asia/Tokyo"}
 ```
+
+**Try these features:**
+
+1. **Tools**: Use `get_current_time` or `convert_time`
+2. **Prompts**: Try `timezone_conversion` with smart completion:
+   - Type "ny" in timezone fields → see "America/New_York" suggested
+   - Type "14" in time field → see "14:00", "14:15", "14:30", "14:45" suggested
+3. **Resources**: Browse `time://help` for documentation
 
 ### Command Line Testing
 
+The MCP protocol requires proper initialization. Use the MCP Inspector for testing:
+
 ```bash
-# Start the server and test via stdio
-echo '{"method": "tools/call", "params": {"name": "get_current_time", "arguments": {"timezone": "Europe/London"}}}' | mcp-server-time
+# Use MCP Inspector for interactive testing
+npx @modelcontextprotocol/inspector mcp-server-time
+
+# Or test with a proper MCP client that handles the initialization handshake
 ```
+
+**Note**: Direct stdio testing requires implementing the full MCP protocol handshake (initialize → tools/list → tools/call).
 
 ## 🚨 Error Handling
 

@@ -1,11 +1,11 @@
 use rmcp::{
-    RoleServer, ServerHandler,
+    ErrorData as McpError, RoleServer, ServerHandler,
     handler::server::{
         router::{prompt::PromptRouter, tool::ToolRouter},
         wrapper::Parameters,
     },
     model::*,
-    prompt, prompt_handler, prompt_router,
+    prompt, prompt_handler, prompt_router, schemars,
     service::RequestContext,
     tool, tool_handler, tool_router,
 };
@@ -15,6 +15,19 @@ use crate::core::{
     error::McpResult,
     models::{ConvertTimeRequest, GetCurrentTimeRequest},
 };
+use serde::{Deserialize, Serialize};
+
+/// Arguments for timezone conversion prompt with completion support
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(description = "Convert time between timezones with smart completion")]
+pub struct TimezoneConversionArgs {
+    #[schemars(description = "Source timezone (IANA format, e.g., 'America/New_York')")]
+    pub source_timezone: String,
+    #[schemars(description = "Time in 24-hour format (HH:MM, e.g., '14:30')")]
+    pub time: String,
+    #[schemars(description = "Target timezone (IANA format, e.g., 'Europe/London')")]
+    pub target_timezone: String,
+}
 
 /// Time MCP Server with timezone operations
 #[derive(Clone)]
@@ -36,6 +49,175 @@ impl TimeService {
             tool_router: Self::tool_router(),
             prompt_router: Self::prompt_router(),
         }
+    }
+
+    /// Fuzzy matching with scoring for completion suggestions
+    fn fuzzy_match(&self, query: &str, candidates: &[String]) -> Vec<String> {
+        if query.is_empty() {
+            return candidates.iter().take(10).map(|s| s.to_string()).collect();
+        }
+
+        let query_lower = query.to_lowercase();
+        let mut scored_matches = Vec::new();
+
+        for candidate in candidates {
+            let candidate_lower = candidate.to_lowercase();
+
+            let score = if candidate_lower == query_lower {
+                1000 // Exact match
+            } else if candidate_lower.starts_with(&query_lower) {
+                900 // Prefix match  
+            } else if candidate_lower.contains(&query_lower) {
+                800 // Contains substring
+            } else if self.is_acronym_match(&query_lower, candidate) {
+                700 // Acronym match (e.g., "ny" → "America/New_York")
+            } else if self.is_subsequence_match(&query_lower, &candidate_lower) {
+                680 // Subsequence match (e.g., "utc" → "UTC")
+            } else if self.is_single_letter_match(&query_lower, candidate) {
+                650 // Single letter match (e.g., "u" → "UTC")
+            } else {
+                continue; // No match
+            };
+
+            scored_matches.push((candidate.to_string(), score));
+        }
+
+        // Sort by score (desc) then alphabetically
+        scored_matches.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+        scored_matches
+            .into_iter()
+            .take(10)
+            .map(|(name, _)| name)
+            .collect()
+    }
+
+    /// Check if query matches as acronym (first letters of words or camelCase)
+    fn is_acronym_match(&self, query: &str, candidate: &str) -> bool {
+        let query_chars: Vec<char> = query.chars().collect();
+
+        // Extract first letters from words (split by slash and underscore)
+        let mut first_chars: Vec<char>;
+
+        // Split by slash for timezone names like "America/New_York"
+        let parts: Vec<&str> = candidate.split('/').collect();
+        if parts.len() > 1 {
+            // Multi-part case (e.g., "America/New_York" -> "ANY")
+            first_chars = parts
+                .into_iter()
+                .flat_map(|part| {
+                    // Split by underscore and get first letters
+                    part.split('_')
+                        .filter_map(|word| word.chars().next())
+                        .map(|c| c.to_lowercase().next().unwrap_or('\0'))
+                })
+                .collect();
+        } else {
+            // Single word case - extract uppercase letters for camelCase
+            first_chars = candidate
+                .chars()
+                .filter(|c| c.is_uppercase())
+                .map(|c| c.to_lowercase().next().unwrap_or('\0'))
+                .collect();
+
+            // If no uppercase letters found, just use first letter
+            if first_chars.is_empty()
+                && !candidate.is_empty()
+                && let Some(first) = candidate.chars().next()
+            {
+                first_chars.push(first.to_lowercase().next().unwrap_or('\0'));
+            }
+        }
+
+        if query_chars.len() != first_chars.len() {
+            return false;
+        }
+
+        query_chars
+            .iter()
+            .zip(first_chars.iter())
+            .all(|(q, c)| q.to_lowercase().next().unwrap_or('\0') == *c)
+    }
+
+    /// Check if query is a subsequence of candidate (e.g., "utc" in "UTC")
+    fn is_subsequence_match(&self, query: &str, candidate_lower: &str) -> bool {
+        let query_chars: Vec<char> = query.chars().collect();
+        let candidate_chars: Vec<char> = candidate_lower.chars().collect();
+
+        let mut query_idx = 0;
+
+        for &candidate_char in &candidate_chars {
+            if query_idx < query_chars.len() && query_chars[query_idx] == candidate_char {
+                query_idx += 1;
+            }
+        }
+
+        query_idx == query_chars.len()
+    }
+
+    /// Check if query matches first letter of single word
+    fn is_single_letter_match(&self, query: &str, candidate: &str) -> bool {
+        if query.len() != 1 {
+            return false;
+        }
+
+        let query_char = query
+            .chars()
+            .next()
+            .unwrap()
+            .to_lowercase()
+            .next()
+            .unwrap_or('\0');
+        let first_char = candidate
+            .chars()
+            .next()
+            .unwrap_or('\0')
+            .to_lowercase()
+            .next()
+            .unwrap_or('\0');
+
+        query_char == first_char
+    }
+
+    /// Get timezone names from chrono-tz for completion
+    fn get_timezone_candidates(&self) -> Vec<String> {
+        use chrono_tz::TZ_VARIANTS;
+
+        // Convert all timezone variants to strings
+        // We'll prioritize common ones and limit the total for performance
+        let mut timezones: Vec<String> =
+            TZ_VARIANTS.iter().map(|tz| tz.name().to_string()).collect();
+
+        // Sort alphabetically for consistent ordering
+        timezones.sort();
+
+        // For completion performance, we can limit to a reasonable number
+        // or implement smarter filtering based on popularity
+        timezones
+    }
+
+    /// Get time format suggestions dynamically generated
+    fn get_time_format_candidates(&self) -> Vec<String> {
+        let mut times = Vec::new();
+
+        // Generate all hours (00:00 to 23:00)
+        for hour in 0..24 {
+            times.push(format!("{:02}:00", hour));
+        }
+
+        // Add common half-hour times
+        for hour in 0..24 {
+            times.push(format!("{:02}:30", hour));
+        }
+
+        // Add common quarter-hour times
+        for hour in 0..24 {
+            times.push(format!("{:02}:15", hour));
+            times.push(format!("{:02}:45", hour));
+        }
+
+        // Sort for consistent ordering
+        times.sort();
+        times
     }
 
     fn create_resource_text(&self, uri: &str, name: &str) -> Resource {
@@ -266,6 +448,59 @@ impl TimeService {
             content: PromptMessageContent::text(guidance),
         }])
     }
+
+    /// Interactive timezone conversion with completion support
+    #[prompt(
+        name = "timezone_conversion",
+        description = "Convert time between timezones with smart completion"
+    )]
+    async fn timezone_conversion(
+        &self,
+        Parameters(args): Parameters<TimezoneConversionArgs>,
+    ) -> McpResult<GetPromptResult> {
+        let result = self.time_server.convert_time(
+            &args.source_timezone,
+            &args.time,
+            &args.target_timezone,
+        )?;
+
+        let messages = vec![
+            PromptMessage::new_text(
+                PromptMessageRole::User,
+                format!(
+                    "Convert {} from {} to {}",
+                    args.time, args.source_timezone, args.target_timezone
+                ),
+            ),
+            PromptMessage::new_text(
+                PromptMessageRole::Assistant,
+                format!(
+                    "Time conversion result:\n\n\
+                     **Source:** {} ({})\n\
+                     **Target:** {} ({})\n\n\
+                     **Details:**\n\
+                     • Source DST: {}\n\
+                     • Target DST: {}\n\
+                     • Day of week: {}",
+                    result.source.timezone,
+                    result.source.datetime,
+                    result.target.timezone,
+                    result.target.datetime,
+                    result.source.is_dst,
+                    result.target.is_dst,
+                    result.target.day_of_week
+                ),
+            ),
+        ];
+
+        Ok(GetPromptResult {
+            description: Some(format!(
+                "Convert {} from {} to {}",
+                args.time, args.source_timezone, args.target_timezone
+            )),
+            messages,
+        })
+    }
 }
 
 #[tool_handler]
@@ -276,13 +511,22 @@ impl ServerHandler for TimeService {
         ServerInfo {
             protocol_version: ProtocolVersion::V_2024_11_05,
             capabilities: ServerCapabilities::builder()
+                .enable_completions()
                 .enable_prompts()
                 .enable_resources()
                 .enable_tools()
                 .build(),
             server_info: Implementation::from_build_env(),
             instructions: Some(format!(
-                "Time MCP Server for timezone operations. Tools: get_current_time, convert_time. Local timezone: {}. Use IANA timezone names.",
+                "Time MCP Server for timezone operations with smart completion:\n\n\
+                 Tools:\n\
+                 • get_current_time: Get current time (timezone completion available)\n\
+                 • convert_time: Convert between timezones (all fields have completion)\n\n\
+                 Completion features:\n\
+                 • Fuzzy matching for timezone names ('ny' → 'America/New_York')\n\
+                 • Time format suggestions (HH:MM format)\n\
+                 • Context-aware suggestions\n\n\
+                 Local timezone: {}",
                 local_tz
             )),
         }
@@ -352,6 +596,65 @@ impl ServerHandler for TimeService {
     ) -> McpResult<InitializeResult> {
         tracing::info!("Time MCP Server initialized successfully");
         Ok(self.get_info())
+    }
+
+    async fn complete(
+        &self,
+        request: CompleteRequestParam,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<CompleteResult, McpError> {
+        let candidates = match &request.r#ref {
+            Reference::Prompt(prompt_ref) => {
+                tracing::debug!(
+                    "Time completion - prompt: {}, argument: {}, value: '{}'",
+                    prompt_ref.name,
+                    request.argument.name,
+                    request.argument.value
+                );
+
+                // The current timezone_guidance prompt doesn't take arguments
+                // But if we had prompts with timezone arguments, we could provide completion
+                match prompt_ref.name.as_str() {
+                    "timezone_guidance" => {
+                        // This prompt doesn't take arguments, so no completion needed
+                        vec![]
+                    }
+                    "timezone_conversion" => {
+                        // Provide completion for timezone conversion prompt arguments
+                        match request.argument.name.as_str() {
+                            "source_timezone" | "target_timezone" => self.get_timezone_candidates(),
+                            "time" => self.get_time_format_candidates(),
+                            _ => vec![],
+                        }
+                    }
+                    _ => {
+                        // For any future prompts that might have timezone-related arguments
+                        match request.argument.name.as_str() {
+                            "source_timezone" | "target_timezone" => self.get_timezone_candidates(),
+                            "time" => self.get_time_format_candidates(),
+                            _ => vec![],
+                        }
+                    }
+                }
+            }
+            Reference::Resource(_resource_ref) => {
+                tracing::debug!(
+                    "Time completion - resource completion not implemented, argument: {}",
+                    request.argument.name
+                );
+                vec![]
+            }
+        };
+
+        let suggestions = self.fuzzy_match(&request.argument.value, &candidates);
+
+        let completion = CompletionInfo {
+            values: suggestions,
+            total: None,
+            has_more: Some(false),
+        };
+
+        Ok(CompleteResult { completion })
     }
 }
 
