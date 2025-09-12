@@ -239,7 +239,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - 📖 **Documentation**: [docs.rs/mcp-server-\*](https://docs.rs/)
 - 🐛 **Issues**: [GitHub Issues](https://github.com/sabry-awad97/rust-mcp-servers/issues)
 - 💬 **Discussions**: [GitHub Discussions](https://github.com/sabry-awad97/rust-mcp-servers/discussions)
-- 📧 **Contact**: [sabry.awad97@gmail.com](mailto:sabry.awad97@gmail.com)
+- 📧 **Contact**: [dr.sabry1997@gmail.com](mailto:dr.sabry1997@gmail.com)
 
 ## 🌟 Star History
 
