@@ -5,13 +5,14 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinHandle;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 /// Handle for managing a background sleep task
 #[derive(Debug)]
 pub struct TaskHandle {
     /// Task join handle
+    #[allow(dead_code)]
     pub handle: JoinHandle<()>,
     /// Cancellation token
     pub cancel_token: tokio_util::sync::CancellationToken,
@@ -26,8 +27,6 @@ pub struct TaskManager {
     task_handles: Arc<Mutex<HashMap<String, TaskHandle>>>,
     /// Maximum number of concurrent operations
     max_concurrent_operations: usize,
-    /// Maximum operation history to keep
-    max_history_size: usize,
 }
 
 impl TaskManager {
@@ -37,17 +36,6 @@ impl TaskManager {
             operations: Arc::new(RwLock::new(HashMap::new())),
             task_handles: Arc::new(Mutex::new(HashMap::new())),
             max_concurrent_operations: 10,
-            max_history_size: 100,
-        }
-    }
-
-    /// Create a new task manager with custom limits
-    pub fn with_limits(max_concurrent: usize, max_history: usize) -> Self {
-        Self {
-            operations: Arc::new(RwLock::new(HashMap::new())),
-            task_handles: Arc::new(Mutex::new(HashMap::new())),
-            max_concurrent_operations: max_concurrent,
-            max_history_size: max_history,
         }
     }
 
@@ -141,9 +129,9 @@ impl TaskManager {
         task_handles: Arc<Mutex<HashMap<String, TaskHandle>>>,
         operation_id: String,
         duration: Duration,
-        start_time: DateTime<Utc>,
+        _start_time: DateTime<Utc>,
         cancel_token: tokio_util::sync::CancellationToken,
-        message: Option<String>,
+        _message: Option<String>,
     ) {
         let update_interval = Duration::from_millis(100); // Update progress every 100ms
         let total_ms = duration.as_millis() as u64;
@@ -274,7 +262,7 @@ impl TaskManager {
 
     /// Cancel a specific operation
     pub async fn cancel_operation(&self, operation_id: &str) -> Result<bool, String> {
-        let mut handles = self.task_handles.lock().await;
+        let handles = self.task_handles.lock().await;
 
         if let Some(task_handle) = handles.get(operation_id) {
             task_handle.cancel_token.cancel();
@@ -349,7 +337,7 @@ impl TaskManager {
     pub async fn cleanup_old_operations(&self) {
         let mut operations = self.operations.write().await;
 
-        if operations.len() <= self.max_history_size {
+        if operations.len() <= 100 {
             return;
         }
 
@@ -376,7 +364,7 @@ impl TaskManager {
         });
 
         // Keep only the most recent completed operations
-        let keep_completed = self.max_history_size / 2; // Keep half for completed operations
+        let keep_completed = 50; // Keep 50 completed operations
         if completed_ops.len() > keep_completed {
             for (id, _) in completed_ops.iter().skip(keep_completed) {
                 to_remove.push(id.clone());
@@ -390,7 +378,7 @@ impl TaskManager {
 
         debug!(
             total_operations = operations.len(),
-            max_history = self.max_history_size,
+            max_history = 100,
             "Cleaned up old operations"
         );
     }
@@ -473,14 +461,17 @@ mod tests {
 
     #[tokio::test]
     async fn test_concurrent_operations_limit() {
-        let manager = TaskManager::with_limits(2, 10);
+        let manager = TaskManager::new();
         let duration = Duration::from_millis(200);
 
-        // Start two operations (should succeed)
-        let _op1 = manager.start_sleep_operation(duration, None).await.unwrap();
-        let _op2 = manager.start_sleep_operation(duration, None).await.unwrap();
+        // Start operations up to the limit (10 operations)
+        let mut operations = Vec::new();
+        for _ in 0..10 {
+            let op = manager.start_sleep_operation(duration, None).await.unwrap();
+            operations.push(op);
+        }
 
-        // Third operation should fail
+        // 11th operation should fail
         let result = manager.start_sleep_operation(duration, None).await;
         assert!(result.is_err());
         assert!(result

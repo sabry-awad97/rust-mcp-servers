@@ -104,16 +104,6 @@ pub fn format_duration(duration: Duration) -> String {
     }
 }
 
-/// Calculate progress percentage for a sleep operation
-pub fn calculate_progress(elapsed: Duration, total: Duration) -> f64 {
-    if total.as_millis() == 0 {
-        return 100.0;
-    }
-
-    let progress = (elapsed.as_millis() as f64 / total.as_millis() as f64) * 100.0;
-    progress.clamp(0.0, 100.0)
-}
-
 /// Parse an ISO 8601 timestamp
 pub fn parse_iso8601(timestamp: &str) -> SleepServerResult<chrono::DateTime<chrono::Utc>> {
     chrono::DateTime::parse_from_rfc3339(timestamp)
@@ -176,26 +166,6 @@ mod tests {
         assert_eq!(format_duration(Duration::from_millis(1500)), "1.500s");
         assert_eq!(format_duration(Duration::from_secs(90)), "1m 30s");
         assert_eq!(format_duration(Duration::from_secs(3665)), "1h 1m 5s");
-    }
-
-    #[test]
-    fn test_calculate_progress() {
-        assert_eq!(
-            calculate_progress(Duration::from_secs(0), Duration::from_secs(10)),
-            0.0
-        );
-        assert_eq!(
-            calculate_progress(Duration::from_secs(5), Duration::from_secs(10)),
-            50.0
-        );
-        assert_eq!(
-            calculate_progress(Duration::from_secs(10), Duration::from_secs(10)),
-            100.0
-        );
-        assert_eq!(
-            calculate_progress(Duration::from_secs(15), Duration::from_secs(10)),
-            100.0
-        );
     }
 
     #[test]

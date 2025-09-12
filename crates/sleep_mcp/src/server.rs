@@ -41,8 +41,8 @@ impl SleepService {
         RawResource::new(uri, name.to_string()).no_annotation()
     }
 
-    fn generate_status_content(&self) -> McpResult<String> {
-        let status = self.sleep_server.get_status(true);
+    async fn generate_status_content(&self, detailed: bool) -> McpResult<String> {
+        let status = self.sleep_server.get_status(detailed, None).await;
 
         Ok(format!(
             r#"Sleep MCP Server Status
@@ -50,33 +50,39 @@ impl SleepService {
 Server: Running
 Current Status: {}
 Max Sleep Duration: 30 minutes
-Tools Available: 4
+Tools Available: 6
 Resources Available: 3
+Active Operations: {}
 
 Current Operation:
 {}
 
 Capabilities:
+- Non-blocking sleep operations with operation IDs
 - Sleep for specific durations (ms, s, m, h)
 - Sleep until specific times (ISO 8601)
 - Real-time status tracking with progress
-- Automatic cancellation on server restart
+- Multiple concurrent operations support
+- Background task management
 - Duration validation and safety limits"#,
             if status.is_sleeping {
                 "Sleeping"
             } else {
                 "Idle"
             },
-            if status.is_sleeping {
+            status.active_operations,
+            if let Some(current_op) = &status.current_operation {
                 format!(
-                    "- Duration: {}ms
+                    "- Operation ID: {}
+- Duration: {}ms
 - Progress: {:.1}%
 - Remaining: {}ms
-- Start Time: {}",
-                    status.current_duration_ms.unwrap_or(0),
-                    status.progress_percent.unwrap_or(0.0),
-                    status.remaining_ms.unwrap_or(0),
-                    status.start_time.as_deref().unwrap_or("Unknown")
+- Status: {:?}",
+                    current_op.operation_id,
+                    current_op.duration_ms,
+                    current_op.progress_percent,
+                    current_op.remaining_ms,
+                    current_op.status
                 )
             } else {
                 "- No active sleep operation".to_string()
@@ -87,41 +93,26 @@ Capabilities:
     fn generate_help_content(&self) -> String {
         r#"Sleep MCP Server Help
 
-BLOCKING TOOLS (Traditional - LLM waits for completion):
-- sleep: Sleep for a specific duration (blocks until complete)
-  - duration: Duration string (required) - e.g., "1s", "500ms", "2m", "1h"
-  - message: Optional message to include in result
-  - Example: {"duration": "5s", "message": "Taking a short break"}
-
-- sleep_until: Sleep until a specific time (blocks until complete)
-  - target_time: ISO 8601 timestamp (required) - e.g., "2025-01-15T14:30:00Z"
-  - message: Optional message to include in result
-  - Example: {"target_time": "2025-01-15T14:30:00Z", "message": "Waiting for meeting"}
-
-NON-BLOCKING TOOLS (Modern - Returns immediately with operation ID):
-- start_sleep: Start a background sleep operation (returns immediately)
+NON-BLOCKING TOOLS (Returns immediately with operation ID):
+- sleep: Start a background sleep operation (returns immediately)
   - duration: Duration string (required) - e.g., "1s", "500ms", "2m", "1h"
   - message: Optional message to include in result
   - Returns: operation_id for tracking
   - Example: {"duration": "30s", "message": "Background processing"}
 
-- start_sleep_until: Start a background sleep until operation (returns immediately)
+- sleep_until: Start a background sleep until operation (returns immediately)
   - target_time: ISO 8601 timestamp (required) - e.g., "2025-01-15T14:30:00Z"
   - message: Optional message to include in result
   - Returns: operation_id for tracking
   - Example: {"target_time": "2025-01-15T14:30:00Z", "message": "Scheduled maintenance"}
 
 STATUS AND CONTROL TOOLS:
-- get_sleep_status: Get legacy sleep operation status (blocking operations only)
-  - detailed: Include detailed timing information (optional, default: false)
-  - Example: {"detailed": true}
-
-- get_enhanced_sleep_status: Get comprehensive status of all operations
+- get_sleep_status: Get comprehensive status of all operations
   - operation_id: Check specific operation (optional)
   - detailed: Include detailed timing information (optional, default: false)
   - Example: {"operation_id": "uuid-here", "detailed": true}
 
-- cancel_sleep: Cancel the current blocking sleep operation
+- cancel_sleep: Cancel all active sleep operations
   - No parameters required
   - Example: {}
 
@@ -312,7 +303,9 @@ impl Default for SleepService {
 
 #[tool_router]
 impl SleepService {
-    #[tool(description = "Sleep for a specific duration")]
+    #[tool(
+        description = "Sleep for a specific duration (non-blocking - returns immediately with operation ID)"
+    )]
     async fn sleep(&self, Parameters(req): Parameters<SleepRequest>) -> McpResult<CallToolResult> {
         let result = self
             .sleep_server
@@ -323,7 +316,9 @@ impl SleepService {
         )]))
     }
 
-    #[tool(description = "Sleep until a specific time")]
+    #[tool(
+        description = "Sleep until a specific time (non-blocking - returns immediately with operation ID)"
+    )]
     async fn sleep_until(
         &self,
         Parameters(req): Parameters<SleepUntilRequest>,
@@ -342,63 +337,24 @@ impl SleepService {
         &self,
         Parameters(req): Parameters<GetStatusRequest>,
     ) -> McpResult<CallToolResult> {
-        let status = self.sleep_server.get_status(req.detailed);
-        Ok(CallToolResult::success(vec![Content::text(
-            serde_json::to_string_pretty(&status).unwrap(),
-        )]))
-    }
-
-    #[tool(description = "Cancel the current sleep operation")]
-    async fn cancel_sleep(&self) -> McpResult<CallToolResult> {
-        let result = self.sleep_server.cancel_sleep().await?;
-        Ok(CallToolResult::success(vec![Content::text(
-            serde_json::to_string_pretty(&result).unwrap(),
-        )]))
-    }
-
-    #[tool(
-        description = "Start a non-blocking sleep operation (returns immediately with operation ID)"
-    )]
-    async fn start_sleep(
-        &self,
-        Parameters(req): Parameters<SleepRequest>,
-    ) -> McpResult<CallToolResult> {
-        let result = self
-            .sleep_server
-            .start_sleep_operation(&req.duration, req.message)
-            .await?;
-        Ok(CallToolResult::success(vec![Content::text(
-            serde_json::to_string_pretty(&result).unwrap(),
-        )]))
-    }
-
-    #[tool(
-        description = "Start a non-blocking sleep until operation (returns immediately with operation ID)"
-    )]
-    async fn start_sleep_until(
-        &self,
-        Parameters(req): Parameters<SleepUntilRequest>,
-    ) -> McpResult<CallToolResult> {
-        let result = self
-            .sleep_server
-            .start_sleep_until_operation(&req.target_time, req.message)
-            .await?;
-        Ok(CallToolResult::success(vec![Content::text(
-            serde_json::to_string_pretty(&result).unwrap(),
-        )]))
-    }
-
-    #[tool(description = "Get enhanced sleep status with background operation tracking")]
-    async fn get_enhanced_sleep_status(
-        &self,
-        Parameters(req): Parameters<GetStatusRequest>,
-    ) -> McpResult<CallToolResult> {
         let status = self
             .sleep_server
-            .get_enhanced_status(req.operation_id)
+            .get_status(req.detailed, req.operation_id)
             .await;
         Ok(CallToolResult::success(vec![Content::text(
             serde_json::to_string_pretty(&status).unwrap(),
+        )]))
+    }
+
+    #[tool(description = "Cancel all active sleep operations")]
+    async fn cancel_sleep(&self) -> McpResult<CallToolResult> {
+        let cancelled_count = self.sleep_server.cancel_all_operations().await;
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&serde_json::json!({
+                "cancelled_count": cancelled_count,
+                "message": format!("Cancelled {} operation(s)", cancelled_count)
+            }))
+            .unwrap(),
         )]))
     }
 
@@ -526,7 +482,7 @@ impl ServerHandler for SleepService {
     ) -> McpResult<ReadResourceResult> {
         match uri.as_str() {
             "sleep://status" => {
-                let status = self.generate_status_content()?;
+                let status = self.generate_status_content(false).await?;
                 Ok(ReadResourceResult {
                     contents: vec![ResourceContents::text(status, uri)],
                 })
@@ -629,9 +585,9 @@ mod tests {
     async fn test_resource_generation() {
         let service = SleepService::new();
 
-        let status = service.generate_status_content();
-        assert!(status.is_ok());
-        assert!(status.unwrap().contains("Sleep MCP Server Status"));
+        let result = service.generate_status_content(false).await;
+        assert!(result.is_ok());
+        assert!(!result.unwrap().is_empty());
 
         let help = service.generate_help_content();
         assert!(help.contains("Sleep MCP Server Help"));

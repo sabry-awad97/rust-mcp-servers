@@ -1,8 +1,5 @@
-use chrono::{DateTime, Utc};
 use rmcp::schemars;
 use serde::{Deserialize, Deserializer, Serialize};
-use std::time::Duration;
-use uuid::Uuid;
 
 /// Helper function to deserialize and trim strings
 fn deserialize_trimmed_string<'de, D>(deserializer: D) -> Result<String, D::Error>
@@ -28,26 +25,6 @@ pub struct SleepResult {
     pub completed: bool,
     /// Optional message about the sleep operation
     pub message: Option<String>,
-}
-
-impl SleepResult {
-    /// Create a new SleepResult
-    pub fn new(
-        duration: Duration,
-        start_time: chrono::DateTime<chrono::Utc>,
-        end_time: chrono::DateTime<chrono::Utc>,
-        completed: bool,
-        message: Option<String>,
-    ) -> Self {
-        Self {
-            duration_ms: duration.as_millis() as u64,
-            duration_str: crate::core::utils::format_duration(duration),
-            start_time: start_time.to_rfc3339(),
-            end_time: end_time.to_rfc3339(),
-            completed,
-            message,
-        }
-    }
 }
 
 /// Sleep status information
@@ -172,20 +149,6 @@ pub struct EnhancedSleepStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
-
-    #[test]
-    fn test_sleep_result_creation() {
-        let start = chrono::Utc::now();
-        let duration = Duration::from_secs(5);
-        let end = start + chrono::Duration::from_std(duration).unwrap();
-
-        let result = SleepResult::new(duration, start, end, true, Some("Test sleep".to_string()));
-
-        assert_eq!(result.duration_ms, 5000);
-        assert!(result.completed);
-        assert_eq!(result.message, Some("Test sleep".to_string()));
-    }
 
     #[test]
     fn test_sleep_request_deserialization() {
