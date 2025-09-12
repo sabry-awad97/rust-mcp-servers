@@ -1,6 +1,8 @@
+use chrono::{DateTime, Utc};
 use rmcp::schemars;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::time::Duration;
+use uuid::Uuid;
 
 /// Helper function to deserialize and trim strings
 fn deserialize_trimmed_string<'de, D>(deserializer: D) -> Result<String, D::Error>
@@ -95,6 +97,76 @@ pub struct GetStatusRequest {
     /// Whether to include detailed information
     #[serde(default)]
     pub detailed: bool,
+    /// Optional operation ID to check specific operation
+    pub operation_id: Option<String>,
+}
+
+/// Operation status enumeration
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, PartialEq)]
+pub enum OperationStatus {
+    /// Operation is currently running
+    Running,
+    /// Operation completed successfully
+    Completed,
+    /// Operation was cancelled
+    Cancelled,
+    /// Operation failed with an error
+    Failed,
+}
+
+/// Background sleep operation information
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct SleepOperation {
+    /// Unique operation identifier
+    pub operation_id: String,
+    /// Operation status
+    pub status: OperationStatus,
+    /// Duration to sleep in milliseconds
+    pub duration_ms: u64,
+    /// Human-readable duration string
+    pub duration_str: String,
+    /// Operation start time (ISO 8601)
+    pub start_time: String,
+    /// Expected end time (ISO 8601)
+    pub expected_end_time: String,
+    /// Actual end time if completed (ISO 8601)
+    pub actual_end_time: Option<String>,
+    /// Progress percentage (0-100)
+    pub progress_percent: f64,
+    /// Time remaining in milliseconds
+    pub remaining_ms: u64,
+    /// Optional message associated with the operation
+    pub message: Option<String>,
+    /// Error message if operation failed
+    pub error: Option<String>,
+}
+
+/// Response for starting a sleep operation
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct SleepStartResponse {
+    /// Unique operation identifier
+    pub operation_id: String,
+    /// Confirmation message
+    pub message: String,
+    /// Duration that will be slept in milliseconds
+    pub duration_ms: u64,
+    /// Human-readable duration string
+    pub duration_str: String,
+    /// Expected completion time (ISO 8601)
+    pub expected_completion: String,
+}
+
+/// Enhanced sleep status with operation tracking
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct EnhancedSleepStatus {
+    /// Whether any sleep operation is currently active
+    pub is_sleeping: bool,
+    /// Number of active operations
+    pub active_operations: usize,
+    /// List of all operations (active and recent completed)
+    pub operations: Vec<SleepOperation>,
+    /// Current primary operation (if any)
+    pub current_operation: Option<SleepOperation>,
 }
 
 #[cfg(test)]

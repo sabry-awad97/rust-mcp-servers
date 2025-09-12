@@ -17,4 +17,5 @@
 pub mod error;
 pub mod models;
 pub mod provider;
+pub mod task_manager;
 pub mod utils;

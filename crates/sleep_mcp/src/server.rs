@@ -87,22 +87,49 @@ Capabilities:
     fn generate_help_content(&self) -> String {
         r#"Sleep MCP Server Help
 
-TOOLS:
-- sleep: Sleep for a specific duration
+BLOCKING TOOLS (Traditional - LLM waits for completion):
+- sleep: Sleep for a specific duration (blocks until complete)
   - duration: Duration string (required) - e.g., "1s", "500ms", "2m", "1h"
   - message: Optional message to include in result
   - Example: {"duration": "5s", "message": "Taking a short break"}
 
-- sleep_until: Sleep until a specific time
+- sleep_until: Sleep until a specific time (blocks until complete)
   - target_time: ISO 8601 timestamp (required) - e.g., "2025-01-15T14:30:00Z"
   - message: Optional message to include in result
   - Example: {"target_time": "2025-01-15T14:30:00Z", "message": "Waiting for meeting"}
 
-- get_sleep_status: Get current sleep operation status
+NON-BLOCKING TOOLS (Modern - Returns immediately with operation ID):
+- start_sleep: Start a background sleep operation (returns immediately)
+  - duration: Duration string (required) - e.g., "1s", "500ms", "2m", "1h"
+  - message: Optional message to include in result
+  - Returns: operation_id for tracking
+  - Example: {"duration": "30s", "message": "Background processing"}
+
+- start_sleep_until: Start a background sleep until operation (returns immediately)
+  - target_time: ISO 8601 timestamp (required) - e.g., "2025-01-15T14:30:00Z"
+  - message: Optional message to include in result
+  - Returns: operation_id for tracking
+  - Example: {"target_time": "2025-01-15T14:30:00Z", "message": "Scheduled maintenance"}
+
+STATUS AND CONTROL TOOLS:
+- get_sleep_status: Get legacy sleep operation status (blocking operations only)
   - detailed: Include detailed timing information (optional, default: false)
   - Example: {"detailed": true}
 
-- cancel_sleep: Cancel the current sleep operation
+- get_enhanced_sleep_status: Get comprehensive status of all operations
+  - operation_id: Check specific operation (optional)
+  - detailed: Include detailed timing information (optional, default: false)
+  - Example: {"operation_id": "uuid-here", "detailed": true}
+
+- cancel_sleep: Cancel the current blocking sleep operation
+  - No parameters required
+  - Example: {}
+
+- cancel_operation: Cancel a specific background operation
+  - operation_id: ID of operation to cancel (required)
+  - Example: {"operation_id": "uuid-here"}
+
+- cancel_all: Cancel all active background operations
   - No parameters required
   - Example: {}
 
@@ -328,6 +355,86 @@ impl SleepService {
             serde_json::to_string_pretty(&result).unwrap(),
         )]))
     }
+
+    #[tool(
+        description = "Start a non-blocking sleep operation (returns immediately with operation ID)"
+    )]
+    async fn start_sleep(
+        &self,
+        Parameters(req): Parameters<SleepRequest>,
+    ) -> McpResult<CallToolResult> {
+        let result = self
+            .sleep_server
+            .start_sleep_operation(&req.duration, req.message)
+            .await?;
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&result).unwrap(),
+        )]))
+    }
+
+    #[tool(
+        description = "Start a non-blocking sleep until operation (returns immediately with operation ID)"
+    )]
+    async fn start_sleep_until(
+        &self,
+        Parameters(req): Parameters<SleepUntilRequest>,
+    ) -> McpResult<CallToolResult> {
+        let result = self
+            .sleep_server
+            .start_sleep_until_operation(&req.target_time, req.message)
+            .await?;
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&result).unwrap(),
+        )]))
+    }
+
+    #[tool(description = "Get enhanced sleep status with background operation tracking")]
+    async fn get_enhanced_sleep_status(
+        &self,
+        Parameters(req): Parameters<GetStatusRequest>,
+    ) -> McpResult<CallToolResult> {
+        let status = self
+            .sleep_server
+            .get_enhanced_status(req.operation_id)
+            .await;
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&status).unwrap(),
+        )]))
+    }
+
+    #[tool(description = "Cancel a specific background operation by ID")]
+    async fn cancel_operation(
+        &self,
+        Parameters(req): Parameters<serde_json::Value>,
+    ) -> McpResult<CallToolResult> {
+        let operation_id = req
+            .get("operation_id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| crate::core::error::SleepServerError::InvalidDuration {
+                duration: "operation_id parameter is required".to_string(),
+            })?;
+
+        let result = self.sleep_server.cancel_operation(operation_id).await?;
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&serde_json::json!({
+                "cancelled": result,
+                "operation_id": operation_id
+            }))
+            .unwrap(),
+        )]))
+    }
+
+    #[tool(description = "Cancel all active background operations")]
+    async fn cancel_all(&self) -> McpResult<CallToolResult> {
+        let cancelled_count = self.sleep_server.cancel_all_operations().await;
+        Ok(CallToolResult::success(vec![Content::text(
+            serde_json::to_string_pretty(&serde_json::json!({
+                "cancelled_count": cancelled_count,
+                "message": format!("Cancelled {} operation(s)", cancelled_count)
+            }))
+            .unwrap(),
+        )]))
+    }
 }
 
 #[prompt_router]
@@ -509,7 +616,10 @@ mod tests {
     #[tokio::test]
     async fn test_get_status_tool() {
         let service = SleepService::new();
-        let req = GetStatusRequest { detailed: true };
+        let req = GetStatusRequest {
+            detailed: true,
+            operation_id: None,
+        };
 
         let result = service.get_sleep_status(Parameters(req)).await;
         assert!(result.is_ok());

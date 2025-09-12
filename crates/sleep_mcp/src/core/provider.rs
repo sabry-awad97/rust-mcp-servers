@@ -5,29 +5,45 @@ use tokio::time;
 
 use crate::core::{
     error::{SleepServerError, SleepServerResult},
-    models::{SleepResult, SleepStatus},
+    models::{
+        EnhancedSleepStatus, OperationStatus, SleepOperation, SleepResult, SleepStartResponse,
+        SleepStatus,
+    },
+    task_manager::TaskManager,
     utils::{calculate_progress, format_duration, parse_duration, parse_iso8601},
 };
 
-/// Sleep operation state
+/// Legacy sleep operation state (for backward compatibility)
 #[derive(Debug, Clone)]
-struct SleepOperation {
+struct LegacySleepOperation {
     start_time: DateTime<Utc>,
     duration: Duration,
     start_instant: Instant,
     message: Option<String>,
 }
 
-/// Sleep server implementation
+/// Enhanced sleep server implementation with background task management
 #[derive(Clone)]
 pub struct SleepServer {
-    current_operation: Arc<Mutex<Option<SleepOperation>>>,
+    /// Legacy current operation for backward compatibility
+    current_operation: Arc<Mutex<Option<LegacySleepOperation>>>,
+    /// Background task manager for non-blocking operations
+    task_manager: TaskManager,
 }
 
 impl SleepServer {
     pub fn new() -> Self {
         Self {
             current_operation: Arc::new(Mutex::new(None)),
+            task_manager: TaskManager::new(),
+        }
+    }
+
+    /// Create a new sleep server with custom task manager limits
+    pub fn with_limits(max_concurrent: usize, max_history: usize) -> Self {
+        Self {
+            current_operation: Arc::new(Mutex::new(None)),
+            task_manager: TaskManager::with_limits(max_concurrent, max_history),
         }
     }
 
@@ -45,7 +61,7 @@ impl SleepServer {
         // Set current operation
         {
             let mut current_op = self.current_operation.lock().unwrap();
-            *current_op = Some(SleepOperation {
+            *current_op = Some(LegacySleepOperation {
                 start_time,
                 duration,
                 start_instant,
@@ -105,7 +121,7 @@ impl SleepServer {
         // Set current operation
         {
             let mut current_op = self.current_operation.lock().unwrap();
-            *current_op = Some(SleepOperation {
+            *current_op = Some(LegacySleepOperation {
                 start_time,
                 duration,
                 start_instant,
@@ -137,7 +153,129 @@ impl SleepServer {
         ))
     }
 
-    /// Get current sleep status
+    /// Start a non-blocking sleep operation (returns immediately with operation ID)
+    pub async fn start_sleep_operation(
+        &self,
+        duration_str: &str,
+        message: Option<String>,
+    ) -> SleepServerResult<SleepStartResponse> {
+        let duration = parse_duration(duration_str)?;
+
+        let operation_id = self
+            .task_manager
+            .start_sleep_operation(duration, message.clone())
+            .await
+            .map_err(|e| SleepServerError::InvalidDuration { duration: e })?;
+
+        let expected_completion =
+            (Utc::now() + chrono::Duration::from_std(duration).unwrap()).to_rfc3339();
+
+        Ok(SleepStartResponse {
+            operation_id,
+            message: format!("Sleep operation started for {}", format_duration(duration)),
+            duration_ms: duration.as_millis() as u64,
+            duration_str: format_duration(duration),
+            expected_completion,
+        })
+    }
+
+    /// Start a non-blocking sleep until operation (returns immediately with operation ID)
+    pub async fn start_sleep_until_operation(
+        &self,
+        target_time_str: &str,
+        message: Option<String>,
+    ) -> SleepServerResult<SleepStartResponse> {
+        let target_time = parse_iso8601(target_time_str)?;
+        let now = Utc::now();
+
+        if target_time <= now {
+            return Err(SleepServerError::InvalidDuration {
+                duration: format!("Target time {} is in the past", target_time_str),
+            });
+        }
+
+        let duration_chrono = target_time - now;
+        let duration = Duration::from_millis(duration_chrono.num_milliseconds().max(0) as u64);
+
+        if duration > crate::core::utils::MAX_SLEEP_DURATION {
+            return Err(SleepServerError::DurationTooLong {
+                duration: format_duration(duration),
+                max_duration: format_duration(crate::core::utils::MAX_SLEEP_DURATION),
+            });
+        }
+
+        let operation_id = self
+            .task_manager
+            .start_sleep_operation(duration, message.clone())
+            .await
+            .map_err(|e| SleepServerError::InvalidDuration { duration: e })?;
+
+        Ok(SleepStartResponse {
+            operation_id,
+            message: format!("Sleep operation started until {}", target_time_str),
+            duration_ms: duration.as_millis() as u64,
+            duration_str: format_duration(duration),
+            expected_completion: target_time.to_rfc3339(),
+        })
+    }
+
+    /// Get enhanced sleep status with background operation tracking
+    pub async fn get_enhanced_status(&self, operation_id: Option<String>) -> EnhancedSleepStatus {
+        if let Some(op_id) = operation_id {
+            // Get specific operation status
+            if let Some(operation) = self.task_manager.get_operation(&op_id).await {
+                EnhancedSleepStatus {
+                    is_sleeping: operation.status == OperationStatus::Running,
+                    active_operations: if operation.status == OperationStatus::Running {
+                        1
+                    } else {
+                        0
+                    },
+                    operations: vec![operation.clone()],
+                    current_operation: Some(operation),
+                }
+            } else {
+                EnhancedSleepStatus {
+                    is_sleeping: false,
+                    active_operations: 0,
+                    operations: vec![],
+                    current_operation: None,
+                }
+            }
+        } else {
+            // Get all operations status
+            let all_operations = self.task_manager.get_all_operations().await;
+            let active_operations = self.task_manager.get_active_operations().await;
+            let current_operation = active_operations.first().cloned();
+
+            EnhancedSleepStatus {
+                is_sleeping: !active_operations.is_empty(),
+                active_operations: active_operations.len(),
+                operations: all_operations,
+                current_operation,
+            }
+        }
+    }
+
+    /// Cancel a specific operation
+    pub async fn cancel_operation(&self, operation_id: &str) -> SleepServerResult<bool> {
+        self.task_manager
+            .cancel_operation(operation_id)
+            .await
+            .map_err(|e| SleepServerError::InvalidDuration { duration: e })
+    }
+
+    /// Cancel all active operations
+    pub async fn cancel_all_operations(&self) -> usize {
+        self.task_manager.cancel_all_operations().await
+    }
+
+    /// Clean up old completed operations
+    pub async fn cleanup_old_operations(&self) {
+        self.task_manager.cleanup_old_operations().await;
+    }
+
+    /// Get current sleep status (legacy method for backward compatibility)
     pub fn get_status(&self, detailed: bool) -> SleepStatus {
         let current_op = self.current_operation.lock().unwrap();
 
