@@ -24,16 +24,13 @@ impl TimeServer {
                 match tz_name.parse::<chrono_tz::Tz>() {
                     Ok(tz) => tz,
                     Err(_) => {
-                        eprintln!(
-                            "Warning: Could not parse timezone '{}', defaulting to UTC",
-                            tz_name
-                        );
+                        tracing::warn!("Could not parse timezone '{}', defaulting to UTC", tz_name);
                         chrono_tz::UTC
                     }
                 }
             }
             Err(_) => {
-                eprintln!("Warning: Could not detect system timezone, defaulting to UTC");
+                tracing::warn!("Could not detect system timezone, defaulting to UTC");
                 chrono_tz::UTC
             }
         };

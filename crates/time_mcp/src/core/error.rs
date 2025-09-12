@@ -37,7 +37,7 @@ impl From<TimeServerError> for McpError {
                 ERROR_RESOURCE_NOT_FOUND,
                 Some(json!({
                     "uri": uri,
-                    "available_resources": ["time://status", "time://help", "time://timezones"]
+                    "available_resources": crate::core::utils::AVAILABLE_RESOURCES
                 })),
             ),
         }
