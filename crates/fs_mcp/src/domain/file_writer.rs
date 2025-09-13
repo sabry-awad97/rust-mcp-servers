@@ -34,6 +34,16 @@ pub trait FileWriter: Send + Sync {
     /// * `Err(FileSystemMcpError)` - If the directory cannot be created
     async fn create_directory(&self, path: &Path) -> FileSystemMcpResult<WriteFileResponse>;
 
+    /// List the contents of a directory
+    ///
+    /// # Arguments
+    /// * `path` - The directory path to list
+    ///
+    /// # Returns
+    /// * `Ok(ListDirectoryResponse)` - Success response with directory contents
+    /// * `Err(FileSystemMcpError)` - If the directory cannot be listed
+    async fn list_directory(&self, path: &Path) -> FileSystemMcpResult<WriteFileResponse>;
+
     /// Delete a file
     ///
     /// # Arguments

@@ -312,6 +312,64 @@ impl FileWriter for FileWriterService {
         Ok(WriteFileResponse::directory_created(path))
     }
 
+    async fn list_directory(&self, path: &Path) -> FileSystemMcpResult<WriteFileResponse> {
+        let mut entries = fs::read_dir(path)
+            .await
+            .map_err(|e| FileSystemMcpError::IoError {
+                message: format!("Failed to list directory: {}", e),
+                path: path.display().to_string(),
+            })?;
+
+        let mut results = Vec::new();
+        while let Some(entry) =
+            entries
+                .next_entry()
+                .await
+                .map_err(|e| FileSystemMcpError::IoError {
+                    message: format!("Failed to read directory entry: {}", e),
+                    path: path.display().to_string(),
+                })?
+        {
+            let metadata = entry
+                .metadata()
+                .await
+                .map_err(|e| FileSystemMcpError::IoError {
+                    message: format!("Failed to get metadata: {}", e),
+                    path: path.display().to_string(),
+                })?;
+            let name = entry.file_name().to_string_lossy().to_string();
+            let file_type = if metadata.is_dir() {
+                "directory".to_string()
+            } else if metadata.is_symlink() {
+                "symlink".to_string()
+            } else {
+                // Extract file extension for better type identification
+                match std::path::Path::new(&name).extension() {
+                    Some(ext) => format!("{} file", ext.to_string_lossy().to_lowercase()),
+                    None => "file".to_string(),
+                }
+            };
+            let size = if metadata.is_file() {
+                format!(" ({} bytes)", metadata.len())
+            } else {
+                String::new()
+            };
+            results.push(format!("{} - {}{}", name, file_type, size));
+        }
+
+        results.sort();
+
+        Ok(WriteFileResponse::new(
+            format!(
+                "Directory listing completed successfully:\n{}",
+                results.join("\n")
+            ),
+            path.display().to_string(),
+            None,
+            false,
+        ))
+    }
+
     async fn delete_file(&self, path: &Path) -> FileSystemMcpResult<WriteFileResponse> {
         if !self.path_exists(path).await {
             return Err(FileSystemMcpError::PathNotFound {
@@ -498,6 +556,182 @@ mod tests {
         // Verify directory was created
         assert!(new_dir.exists());
         assert!(new_dir.is_dir());
+    }
+
+    #[tokio::test]
+    async fn test_list_directory_empty() {
+        let service = FileWriterService::new();
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+
+        let result = service.list_directory(temp_dir.path()).await;
+        assert!(result.is_ok());
+
+        let response = result.unwrap();
+        assert!(
+            response
+                .message
+                .contains("Directory listing completed successfully")
+        );
+        // Empty directory should have minimal content
+        let lines: Vec<&str> = response.message.lines().collect();
+        assert_eq!(lines.len(), 1); // Just the header line
+    }
+
+    #[tokio::test]
+    async fn test_list_directory_with_files() {
+        let service = FileWriterService::new();
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+
+        // Create test files with different extensions
+        let test_file1 = temp_dir.path().join("test.txt");
+        let test_file2 = temp_dir.path().join("config.toml");
+        let test_file3 = temp_dir.path().join("script.rs");
+        let test_file4 = temp_dir.path().join("no_extension");
+
+        fs::write(&test_file1, "Hello world").await.unwrap();
+        fs::write(&test_file2, "[section]\nkey=value")
+            .await
+            .unwrap();
+        fs::write(&test_file3, "fn main() {}").await.unwrap();
+        fs::write(&test_file4, "binary data").await.unwrap();
+
+        let result = service.list_directory(temp_dir.path()).await;
+        assert!(result.is_ok());
+
+        let response = result.unwrap();
+        assert!(
+            response
+                .message
+                .contains("Directory listing completed successfully")
+        );
+
+        // Check that all files are listed with correct types
+        assert!(response.message.contains("test.txt - txt file"));
+        assert!(response.message.contains("config.toml - toml file"));
+        assert!(response.message.contains("script.rs - rs file"));
+        assert!(response.message.contains("no_extension - file"));
+
+        // Check that file sizes are included
+        assert!(response.message.contains("bytes"));
+    }
+
+    #[tokio::test]
+    async fn test_list_directory_with_subdirectories() {
+        let service = FileWriterService::new();
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+
+        // Create subdirectories
+        let sub_dir1 = temp_dir.path().join("subdir1");
+        let sub_dir2 = temp_dir.path().join("subdir2");
+        fs::create_dir(&sub_dir1).await.unwrap();
+        fs::create_dir(&sub_dir2).await.unwrap();
+
+        // Create a file in the main directory
+        let test_file = temp_dir.path().join("readme.md");
+        fs::write(&test_file, "# Test").await.unwrap();
+
+        let result = service.list_directory(temp_dir.path()).await;
+        assert!(result.is_ok());
+
+        let response = result.unwrap();
+        assert!(
+            response
+                .message
+                .contains("Directory listing completed successfully")
+        );
+
+        // Check that directories are listed correctly
+        assert!(response.message.contains("subdir1 - directory"));
+        assert!(response.message.contains("subdir2 - directory"));
+        assert!(response.message.contains("readme.md - md file"));
+
+        // Directories should not have size information
+        assert!(!response.message.contains("subdir1 - directory ("));
+        assert!(!response.message.contains("subdir2 - directory ("));
+    }
+
+    #[tokio::test]
+    async fn test_list_directory_sorted_output() {
+        let service = FileWriterService::new();
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+
+        // Create files in non-alphabetical order
+        let files = ["zebra.txt", "alpha.txt", "beta.txt"];
+        for file in &files {
+            let file_path = temp_dir.path().join(file);
+            fs::write(&file_path, "content").await.unwrap();
+        }
+
+        let result = service.list_directory(temp_dir.path()).await;
+        assert!(result.is_ok());
+
+        let response = result.unwrap();
+        let content = response.message;
+
+        // Find positions of each file in the output
+        let alpha_pos = content.find("alpha.txt").unwrap();
+        let beta_pos = content.find("beta.txt").unwrap();
+        let zebra_pos = content.find("zebra.txt").unwrap();
+
+        // Verify alphabetical order
+        assert!(alpha_pos < beta_pos);
+        assert!(beta_pos < zebra_pos);
+    }
+
+    #[tokio::test]
+    async fn test_list_directory_nonexistent() {
+        let service = FileWriterService::new();
+        let nonexistent_path = std::path::Path::new("/nonexistent/directory");
+
+        let result = service.list_directory(nonexistent_path).await;
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            FileSystemMcpError::IoError { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_list_directory_mixed_content() {
+        let service = FileWriterService::new();
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+
+        // Create mixed content: files, directories, different extensions
+        fs::create_dir(temp_dir.path().join("docs")).await.unwrap();
+        fs::create_dir(temp_dir.path().join("src")).await.unwrap();
+
+        fs::write(temp_dir.path().join("Cargo.toml"), "[package]")
+            .await
+            .unwrap();
+        fs::write(temp_dir.path().join("README.md"), "# Project")
+            .await
+            .unwrap();
+        fs::write(temp_dir.path().join("main.rs"), "fn main() {}")
+            .await
+            .unwrap();
+        fs::write(temp_dir.path().join("data.json"), "{}")
+            .await
+            .unwrap();
+
+        let result = service.list_directory(temp_dir.path()).await;
+        assert!(result.is_ok());
+
+        let response = result.unwrap();
+        let content = response.message;
+
+        // Verify all items are present with correct types
+        assert!(content.contains("docs - directory"));
+        assert!(content.contains("src - directory"));
+        assert!(content.contains("Cargo.toml - toml file"));
+        assert!(content.contains("README.md - md file"));
+        assert!(content.contains("main.rs - rs file"));
+        assert!(content.contains("data.json - json file"));
+
+        // Verify sorting (directories and files mixed but alphabetically sorted)
+        let lines: Vec<&str> = content.lines().skip(1).collect(); // Skip header
+        let mut sorted_lines = lines.clone();
+        sorted_lines.sort();
+        assert_eq!(lines, sorted_lines);
     }
 
     #[tokio::test]

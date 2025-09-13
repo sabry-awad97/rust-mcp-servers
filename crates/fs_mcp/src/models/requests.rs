@@ -253,3 +253,27 @@ impl Validate for CreateDirectoryRequest {
         Ok(())
     }
 }
+
+/// Request to list directory contents
+#[derive(Debug, Deserialize, schemars::JsonSchema, Getters)]
+pub struct ListDirectoryRequest {
+    /// Path to the directory to list
+    path: String,
+}
+
+impl Validate for ListDirectoryRequest {
+    fn validate(&self) -> FileSystemMcpResult<()> {
+        if self.path.trim().is_empty() {
+            return Err(FileSystemMcpError::ValidationError {
+                message: "Invalid path".to_string(),
+                path: self.path.clone(),
+                operation: "list_directory".to_string(),
+                data: serde_json::json!({
+                    "error": "Path cannot be empty",
+                    "provided_path": self.path
+                }),
+            });
+        }
+        Ok(())
+    }
+}

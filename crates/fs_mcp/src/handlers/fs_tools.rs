@@ -14,8 +14,8 @@ use crate::{
     domain::{FileReader, FileWriter},
     errors::{FileSystemMcpError, ToolResult},
     models::requests::{
-        CreateDirectoryRequest, EditFileRequest, ReadMediaFileRequest, ReadMultipleFilesRequest,
-        ReadTextFileRequest, WriteFileRequest,
+        CreateDirectoryRequest, EditFileRequest, ListDirectoryRequest, ReadMediaFileRequest,
+        ReadMultipleFilesRequest, ReadTextFileRequest, WriteFileRequest,
     },
     service::validation::{Validate, validate_path},
 };
@@ -176,6 +176,17 @@ impl FileSystemService {
         req.validate()?;
         let valid_path = validate_path(req.path(), &self.allowed_directories).await?;
         let result = self.file_writer.create_directory(&valid_path).await?;
+        Ok(CallToolResult::success(vec![result.into()]))
+    }
+
+    #[tool(description = "Get a detailed listing of all files and directories in a specified path")]
+    async fn list_directory(
+        &self,
+        Parameters(req): Parameters<ListDirectoryRequest>,
+    ) -> ToolResult {
+        req.validate()?;
+        let valid_path = validate_path(req.path(), &self.allowed_directories).await?;
+        let result = self.file_writer.list_directory(&valid_path).await?;
         Ok(CallToolResult::success(vec![result.into()]))
     }
 }
