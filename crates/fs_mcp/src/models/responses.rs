@@ -84,3 +84,96 @@ impl From<ReadFileResponse> for Content {
         }
     }
 }
+
+/// Response for file write operations
+#[derive(Debug)]
+pub struct WriteFileResponse {
+    /// Success message describing the operation
+    pub message: String,
+    /// Path of the file/directory that was operated on
+    pub path: String,
+    /// Size of the file in bytes (if applicable)
+    pub size: Option<u64>,
+    /// Whether the operation created a new file/directory
+    pub created: bool,
+}
+
+impl WriteFileResponse {
+    /// Create a new WriteFileResponse for file operations
+    pub fn new(message: String, path: String, size: Option<u64>, created: bool) -> Self {
+        Self {
+            message,
+            path,
+            size,
+            created,
+        }
+    }
+
+    /// Create a success response for file write operations
+    pub fn file_written(path: &Path, size: u64, created: bool) -> Self {
+        let action = if created { "created" } else { "updated" };
+        Self {
+            message: format!("File {} successfully with {} bytes", action, size),
+            path: path.display().to_string(),
+            size: Some(size),
+            created,
+        }
+    }
+
+    /// Create a success response for directory operations
+    pub fn directory_created(path: &Path) -> Self {
+        Self {
+            message: "Directory created successfully".to_string(),
+            path: path.display().to_string(),
+            size: None,
+            created: true,
+        }
+    }
+
+    /// Create a success response for delete operations
+    pub fn deleted(path: &Path, is_directory: bool) -> Self {
+        let item_type = if is_directory { "Directory" } else { "File" };
+        Self {
+            message: format!("{} deleted successfully", item_type),
+            path: path.display().to_string(),
+            size: None,
+            created: false,
+        }
+    }
+
+    /// Create a success response for move operations
+    pub fn moved(from: &Path, to: &Path) -> Self {
+        Self {
+            message: "File/directory moved successfully".to_string(),
+            path: format!("{} -> {}", from.display(), to.display()),
+            size: None,
+            created: false,
+        }
+    }
+
+    /// Create a success response for copy operations
+    pub fn copied(from: &Path, to: &Path, size: u64) -> Self {
+        Self {
+            message: "File copied successfully".to_string(),
+            path: format!("{} -> {}", from.display(), to.display()),
+            size: Some(size),
+            created: true,
+        }
+    }
+}
+
+impl fmt::Display for WriteFileResponse {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}: {}", self.message, self.path)?;
+        if let Some(size) = self.size {
+            write!(f, " ({} bytes)", size)?;
+        }
+        Ok(())
+    }
+}
+
+impl From<WriteFileResponse> for Content {
+    fn from(value: WriteFileResponse) -> Self {
+        Content::text(value.to_string())
+    }
+}

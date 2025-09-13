@@ -140,7 +140,7 @@ pub async fn validate_path(
                     }
                     Ok(absolute_path)
                 }
-                Err(_) => Err(FileSystemMcpError::DirectoryNotFound {
+                Err(_) => Err(FileSystemMcpError::PathNotFound {
                     path: format!("Parent directory does not exist: {}", parent_dir.display()),
                 }),
             }

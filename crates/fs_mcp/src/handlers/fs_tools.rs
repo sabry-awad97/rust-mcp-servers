@@ -10,10 +10,12 @@ use rmcp::{
 };
 
 use crate::{
-    application::FileReaderService,
-    domain::FileReader,
+    application::{FileReaderService, FileWriterService},
+    domain::{FileReader, FileWriter},
     errors::{FileSystemMcpError, ToolResult},
-    models::requests::{ReadMediaFileRequest, ReadMultipleFilesRequest, ReadTextFileRequest},
+    models::requests::{
+        ReadMediaFileRequest, ReadMultipleFilesRequest, ReadTextFileRequest, WriteFileRequest,
+    },
     service::validation::{Validate, validate_path},
 };
 use std::sync::Arc;
@@ -25,6 +27,7 @@ use std::sync::Arc;
 pub struct FileSystemService {
     allowed_directories: Vec<PathBuf>,
     file_reader: Arc<dyn FileReader>,
+    file_writer: Arc<dyn FileWriter>,
     tool_router: ToolRouter<FileSystemService>,
 }
 
@@ -34,6 +37,7 @@ impl FileSystemService {
         Self {
             allowed_directories,
             file_reader: Arc::new(FileReaderService::new()),
+            file_writer: Arc::new(FileWriterService::new()),
             tool_router: Self::tool_router(),
         }
     }
@@ -106,7 +110,7 @@ impl FileSystemService {
 
         // Validate all paths first
         let mut validated_paths = Vec::new();
-        for path_str in &req.paths {
+        for path_str in req.paths() {
             let path = validate_path(path_str, &self.allowed_directories).await?;
             validated_paths.push(path);
         }
@@ -133,6 +137,19 @@ impl FileSystemService {
         Ok(CallToolResult::success(vec![Content::text(
             contents.join("\n---\n"),
         )]))
+    }
+
+    #[tool(
+        description = "Create a new file or completely overwrite an existing file with new content. Use with caution as it will overwrite existing files without warning. Handles text content with proper encoding. Only works within allowed directories."
+    )]
+    async fn write_file(&self, Parameters(req): Parameters<WriteFileRequest>) -> ToolResult {
+        req.validate()?;
+        let valid_path = validate_path(req.path(), &self.allowed_directories).await?;
+        let result = self
+            .file_writer
+            .write_file(&valid_path, req.content())
+            .await?;
+        Ok(CallToolResult::success(vec![result.into()]))
     }
 }
 

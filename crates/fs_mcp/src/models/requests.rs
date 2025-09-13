@@ -22,7 +22,7 @@ pub struct ReadTextFileRequest {
 
 impl Validate for ReadTextFileRequest {
     fn validate(&self) -> FileSystemMcpResult<()> {
-        if self.path.is_empty() {
+        if self.path.trim().is_empty() {
             return Err(FileSystemMcpError::ValidationError {
                 message: "Invalid path".to_string(),
                 path: self.path.clone(),
@@ -47,12 +47,12 @@ impl Validate for ReadTextFileRequest {
 #[derive(Debug, Deserialize, schemars::JsonSchema, Getters)]
 pub struct ReadMediaFileRequest {
     /// Path to the media file to read
-    pub path: String,
+    path: String,
 }
 
 impl Validate for ReadMediaFileRequest {
     fn validate(&self) -> FileSystemMcpResult<()> {
-        if self.path.is_empty() {
+        if self.path.trim().is_empty() {
             return Err(FileSystemMcpError::ValidationError {
                 message: "Invalid path".to_string(),
                 path: self.path.clone(),
@@ -66,10 +66,10 @@ impl Validate for ReadMediaFileRequest {
 }
 
 /// Request to read multiple files
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Deserialize, schemars::JsonSchema, Getters)]
 pub struct ReadMultipleFilesRequest {
     /// Array of file paths to read
-    pub paths: Vec<String>,
+    paths: Vec<String>,
 }
 
 impl Validate for ReadMultipleFilesRequest {
@@ -84,7 +84,7 @@ impl Validate for ReadMultipleFilesRequest {
         }
 
         for path in &self.paths {
-            if path.is_empty() {
+            if path.trim().is_empty() {
                 return Err(FileSystemMcpError::ValidationError {
                     message: "Invalid path".to_string(),
                     path: path.clone(),
@@ -92,6 +92,45 @@ impl Validate for ReadMultipleFilesRequest {
                     data: serde_json::json!({"error": "Path is empty"}),
                 });
             }
+        }
+
+        Ok(())
+    }
+}
+
+/// Request to write a file
+#[derive(Debug, Deserialize, schemars::JsonSchema, Getters)]
+pub struct WriteFileRequest {
+    /// Path to the file to write
+    path: String,
+    /// Content to write to the file
+    content: String,
+}
+
+impl Validate for WriteFileRequest {
+    fn validate(&self) -> Result<(), FileSystemMcpError> {
+        if self.path.trim().is_empty() {
+            return Err(FileSystemMcpError::ValidationError {
+                message: "Invalid path".to_string(),
+                path: self.path.clone(),
+                operation: "validate".to_string(),
+                data: serde_json::json!({"error": "Path is empty"}),
+            });
+        }
+
+        // Additional validation for content size (optional safety check)
+        if self.content.len() > 100_000_000 {
+            // 100MB limit
+            return Err(FileSystemMcpError::ValidationError {
+                message: "Content too large".to_string(),
+                path: self.path.clone(),
+                operation: "validate".to_string(),
+                data: serde_json::json!({
+                    "error": "Content exceeds maximum size limit",
+                    "max_size": 100_000_000,
+                    "actual_size": self.content.len()
+                }),
+            });
         }
 
         Ok(())

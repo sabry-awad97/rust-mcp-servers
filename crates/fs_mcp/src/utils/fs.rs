@@ -124,7 +124,7 @@ pub async fn resolve_directories(directories: Vec<PathBuf>) -> FileSystemMcpResu
                     path: dir.display().to_string(),
                 }
             } else {
-                FileSystemMcpError::DirectoryNotFound {
+                FileSystemMcpError::PathNotFound {
                     path: dir.display().to_string(),
                 }
             }
@@ -245,7 +245,7 @@ mod tests {
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
-            FileSystemMcpError::DirectoryNotFound { .. }
+            FileSystemMcpError::PathNotFound { .. }
         ));
 
         // Test with file instead of directory

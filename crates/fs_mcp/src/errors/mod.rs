@@ -12,9 +12,9 @@ pub type ToolResult = McpResult<rmcp::model::CallToolResult>;
 /// CLI-related errors
 #[derive(thiserror::Error, Debug)]
 pub enum FileSystemMcpError {
-    #[error("Directory does not exist: {path}")]
-    DirectoryNotFound { path: String },
-    #[error("Permission denied for directory: {path}")]
+    #[error("Path does not exist: {path}")]
+    PathNotFound { path: String },
+    #[error("Permission denied for path: {path}")]
     PermissionDenied { path: String },
     /// Logging initialization failed
     #[error("Logging initialization failed: {0}")]
@@ -26,18 +26,19 @@ pub enum FileSystemMcpError {
         operation: String,
         data: serde_json::Value,
     },
+    #[error("Failed to write file: {message}")]
+    IoError { message: String, path: String },
 }
 
 impl From<FileSystemMcpError> for McpError {
     fn from(err: FileSystemMcpError) -> Self {
         match err {
-            FileSystemMcpError::DirectoryNotFound { path } => {
-                McpError::resource_not_found(format!("Directory does not exist: {}", path), None)
+            FileSystemMcpError::PathNotFound { path } => {
+                McpError::resource_not_found(format!("Path does not exist: {}", path), None)
             }
-            FileSystemMcpError::PermissionDenied { path } => McpError::invalid_request(
-                format!("Permission denied for directory: {}", path),
-                None,
-            ),
+            FileSystemMcpError::PermissionDenied { path } => {
+                McpError::invalid_request(format!("Permission denied for path: {}", path), None)
+            }
             FileSystemMcpError::LoggingInitialization(msg) => {
                 McpError::internal_error(format!("Logging initialization failed: {}", msg), None)
             }
@@ -53,6 +54,13 @@ impl From<FileSystemMcpError> for McpError {
                     "operation": operation,
                     "path": path,
                     "data": data
+                })),
+            ),
+            FileSystemMcpError::IoError { message, path } => McpError::invalid_request(
+                format!("Failed to write file: {}", message),
+                Some(serde_json::json!({
+                    "error": message,
+                    "path": path,
                 })),
             ),
         }
