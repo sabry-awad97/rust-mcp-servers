@@ -13,7 +13,7 @@ use crate::{
     application::FileReaderService,
     domain::FileReader,
     errors::{FileSystemMcpError, ToolResult},
-    models::requests::ReadTextFileRequest,
+    models::requests::{ReadMediaFileRequest, ReadTextFileRequest},
     service::validation::{Validate, validate_path},
 };
 use std::sync::Arc;
@@ -41,7 +41,9 @@ impl FileSystemService {
 
 #[tool_router]
 impl FileSystemService {
-    #[tool(description = "Read the complete contents of a file from the file system as text")]
+    #[tool(
+        description = "Read the complete contents of a file from the file system as text. Only works within allowed directories."
+    )]
     async fn read_text_file(&self, Parameters(req): Parameters<ReadTextFileRequest>) -> ToolResult {
         // Validate request parameters
         req.validate()?;
@@ -75,12 +77,24 @@ impl FileSystemService {
             }
         };
 
-        Ok(CallToolResult::success(vec![Content::text(content)]))
+        Ok(CallToolResult::success(vec![content.into()]))
+    }
+
+    #[tool(
+        description = "Read an image or audio file and return base64 encoded data and MIME type. Only works within allowed directories."
+    )]
+    async fn read_media_file(
+        &self,
+        Parameters(req): Parameters<ReadMediaFileRequest>,
+    ) -> ToolResult {
+        req.validate()?;
+        let path = validate_path(req.path(), &self.allowed_directories).await?;
+
+        let content = self.file_reader.read_media_file(&path).await?;
+
+        Ok(CallToolResult::success(vec![content.into()]))
     }
 }
-
-// File reading operations are now handled by the injected FileReader service
-// This follows the Single Responsibility Principle and Dependency Inversion Principle
 
 #[tool_handler]
 impl ServerHandler for FileSystemService {

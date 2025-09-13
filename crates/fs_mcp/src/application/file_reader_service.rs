@@ -6,6 +6,7 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 
 use crate::domain::file_reader::FileReader;
 use crate::errors::{FileSystemMcpError, FileSystemMcpResult};
+use crate::models::responses::ReadFileResponse;
 
 /// Concrete implementation of FileReader using streaming I/O operations
 ///
@@ -19,6 +20,43 @@ impl FileReaderService {
     pub fn new() -> Self {
         Self
     }
+
+    /// Reusable function to read file content as bytes using Node.js-style streaming
+    ///
+    /// This private method provides the core streaming functionality that can be
+    /// reused by both text and media file reading operations.
+    async fn read_file_bytes(&self, path: &Path) -> FileSystemMcpResult<Vec<u8>> {
+        let file = File::open(path)
+            .await
+            .map_err(|_| FileSystemMcpError::PermissionDenied {
+                path: path.display().to_string(),
+            })?;
+
+        // Use buffered reader for streaming chunks like Node.js
+        let mut reader = BufReader::new(file);
+        let mut contents = Vec::new();
+
+        // Stream file in chunks
+        const CHUNK_SIZE: usize = 8192; // 8KB chunks like Node.js default
+        let mut buffer = vec![0u8; CHUNK_SIZE];
+
+        loop {
+            let bytes_read = reader.read(&mut buffer).await.map_err(|_| {
+                FileSystemMcpError::PermissionDenied {
+                    path: path.display().to_string(),
+                }
+            })?;
+
+            if bytes_read == 0 {
+                break; // End of file reached
+            }
+
+            // Append chunk to contents
+            contents.extend_from_slice(&buffer[..bytes_read]);
+        }
+
+        Ok(contents)
+    }
 }
 
 impl Default for FileReaderService {
@@ -29,29 +67,21 @@ impl Default for FileReaderService {
 
 #[async_trait]
 impl FileReader for FileReaderService {
-    /// Read the entire contents of a file using buffered streaming
-    async fn read_entire_file(&self, path: &Path) -> FileSystemMcpResult<String> {
-        let mut file =
-            File::open(path)
-                .await
-                .map_err(|_| FileSystemMcpError::PermissionDenied {
-                    path: path.display().to_string(),
-                })?;
-
-        let mut contents = String::new();
-        file.read_to_string(&mut contents).await.map_err(|_| {
-            FileSystemMcpError::PermissionDenied {
-                path: path.display().to_string(),
-            }
-        })?;
-
-        Ok(contents)
+    /// Read the entire contents of a file using reusable streaming function
+    async fn read_entire_file(&self, path: &Path) -> FileSystemMcpResult<ReadFileResponse> {
+        let bytes = self.read_file_bytes(path).await?;
+        let contents = String::from_utf8_lossy(&bytes).to_string();
+        Ok(ReadFileResponse::text(contents))
     }
 
     /// Read the first N lines using streaming with early termination
-    async fn read_file_head(&self, path: &Path, lines: usize) -> FileSystemMcpResult<String> {
+    async fn read_file_head(
+        &self,
+        path: &Path,
+        lines: usize,
+    ) -> FileSystemMcpResult<ReadFileResponse> {
         if lines == 0 {
-            return Ok(String::new());
+            return Ok(ReadFileResponse::text(String::new()));
         }
 
         let file = File::open(path)
@@ -77,13 +107,17 @@ impl FileReader for FileReaderService {
             }
         }
 
-        Ok(result_lines.join("\n"))
+        Ok(ReadFileResponse::text(result_lines.join("\n")))
     }
 
     /// Read the last N lines using memory-efficient circular buffer
-    async fn read_file_tail(&self, path: &Path, lines: usize) -> FileSystemMcpResult<String> {
+    async fn read_file_tail(
+        &self,
+        path: &Path,
+        lines: usize,
+    ) -> FileSystemMcpResult<ReadFileResponse> {
         if lines == 0 {
-            return Ok(String::new());
+            return Ok(ReadFileResponse::text(String::new()));
         }
 
         let file = File::open(path)
@@ -112,10 +146,18 @@ impl FileReader for FileReaderService {
         }
 
         // Join the lines in the circular buffer
-        Ok(circular_buffer
-            .into_iter()
-            .collect::<Vec<String>>()
-            .join("\n"))
+        Ok(ReadFileResponse::text(
+            circular_buffer
+                .into_iter()
+                .collect::<Vec<String>>()
+                .join("\n"),
+        ))
+    }
+
+    /// Read a media file and return base64-encoded content with MIME type
+    async fn read_media_file(&self, path: &Path) -> FileSystemMcpResult<ReadFileResponse> {
+        let bytes = self.read_file_bytes(path).await?;
+        Ok(ReadFileResponse::new(bytes, path))
     }
 }
 
@@ -140,7 +182,12 @@ mod tests {
 
         let result = service.read_entire_file(temp_file.path()).await;
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), "line1\nline2\nline3");
+        let response = result.unwrap();
+        if let crate::models::responses::FileContent::Text(content) = response.content {
+            assert_eq!(content, "line1\nline2\nline3");
+        } else {
+            panic!("Expected text content");
+        }
     }
 
     #[tokio::test]
@@ -150,7 +197,12 @@ mod tests {
 
         let result = service.read_file_head(temp_file.path(), 3).await;
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), "line1\nline2\nline3");
+        let response = result.unwrap();
+        if let crate::models::responses::FileContent::Text(content) = response.content {
+            assert_eq!(content, "line1\nline2\nline3");
+        } else {
+            panic!("Expected text content");
+        }
     }
 
     #[tokio::test]
@@ -160,7 +212,12 @@ mod tests {
 
         let result = service.read_file_head(temp_file.path(), 0).await;
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), "");
+        let response = result.unwrap();
+        if let crate::models::responses::FileContent::Text(content) = response.content {
+            assert_eq!(content, "");
+        } else {
+            panic!("Expected text content");
+        }
     }
 
     #[tokio::test]
@@ -170,7 +227,12 @@ mod tests {
 
         let result = service.read_file_tail(temp_file.path(), 3).await;
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), "line3\nline4\nline5");
+        let response = result.unwrap();
+        if let crate::models::responses::FileContent::Text(content) = response.content {
+            assert_eq!(content, "line3\nline4\nline5");
+        } else {
+            panic!("Expected text content");
+        }
     }
 
     #[tokio::test]
@@ -180,7 +242,12 @@ mod tests {
 
         let result = service.read_file_tail(temp_file.path(), 0).await;
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), "");
+        let response = result.unwrap();
+        if let crate::models::responses::FileContent::Text(content) = response.content {
+            assert_eq!(content, "");
+        } else {
+            panic!("Expected text content");
+        }
     }
 
     #[tokio::test]

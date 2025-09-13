@@ -42,3 +42,25 @@ impl Validate for ReadTextFileRequest {
         Ok(())
     }
 }
+
+/// Request to read a media file
+#[derive(Debug, Deserialize, schemars::JsonSchema, Getters)]
+pub struct ReadMediaFileRequest {
+    /// Path to the media file to read
+    pub path: String,
+}
+
+impl Validate for ReadMediaFileRequest {
+    fn validate(&self) -> FileSystemMcpResult<()> {
+        if self.path.is_empty() {
+            return Err(FileSystemMcpError::ValidationError {
+                message: "Invalid path".to_string(),
+                path: self.path.clone(),
+                operation: "validate".to_string(),
+                data: serde_json::json!({"error": "Path is empty"}),
+            });
+        }
+
+        Ok(())
+    }
+}

@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use std::path::Path;
 
-use crate::errors::FileSystemMcpResult;
+use crate::{errors::FileSystemMcpResult, models::responses::ReadFileResponse};
 
 /// Domain trait for file reading operations
 ///
@@ -17,7 +17,7 @@ pub trait FileReader: Send + Sync {
     /// # Returns
     /// * `Ok(String)` - The complete file contents
     /// * `Err(FileSystemMcpError)` - If the file cannot be read
-    async fn read_entire_file(&self, path: &Path) -> FileSystemMcpResult<String>;
+    async fn read_entire_file(&self, path: &Path) -> FileSystemMcpResult<ReadFileResponse>;
 
     /// Read the first N lines of a file
     ///
@@ -28,7 +28,11 @@ pub trait FileReader: Send + Sync {
     /// # Returns
     /// * `Ok(String)` - The first N lines joined with newlines
     /// * `Err(FileSystemMcpError)` - If the file cannot be read
-    async fn read_file_head(&self, path: &Path, lines: usize) -> FileSystemMcpResult<String>;
+    async fn read_file_head(
+        &self,
+        path: &Path,
+        lines: usize,
+    ) -> FileSystemMcpResult<ReadFileResponse>;
 
     /// Read the last N lines of a file using memory-efficient streaming
     ///
@@ -39,5 +43,19 @@ pub trait FileReader: Send + Sync {
     /// # Returns
     /// * `Ok(String)` - The last N lines joined with newlines
     /// * `Err(FileSystemMcpError)` - If the file cannot be read
-    async fn read_file_tail(&self, path: &Path, lines: usize) -> FileSystemMcpResult<String>;
+    async fn read_file_tail(
+        &self,
+        path: &Path,
+        lines: usize,
+    ) -> FileSystemMcpResult<ReadFileResponse>;
+
+    /// Read the entire contents of a file as a string
+    ///
+    /// # Arguments
+    /// * `path` - The file path to read
+    ///
+    /// # Returns
+    /// * `Ok(ReadMediaFileResponse)` - The complete file contents as base64 encoded data and MIME type
+    /// * `Err(FileSystemMcpError)` - If the file cannot be read
+    async fn read_media_file(&self, path: &Path) -> FileSystemMcpResult<ReadFileResponse>;
 }
