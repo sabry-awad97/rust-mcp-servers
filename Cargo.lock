@@ -632,6 +632,7 @@ dependencies = [
  "clap",
  "derive-getters",
  "dirs",
+ "futures",
  "mime_guess",
  "predicates",
  "rmcp",

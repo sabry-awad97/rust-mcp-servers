@@ -159,6 +159,21 @@ impl FileReader for FileReaderService {
         let bytes = self.read_file_bytes(path).await?;
         Ok(ReadFileResponse::new(bytes, path))
     }
+
+    /// Read files concurrently using futures::join_all for scalability with many files
+    async fn read_files(
+        &self,
+        paths: &[std::path::PathBuf],
+    ) -> Vec<Result<crate::models::responses::ReadFileResponse, FileSystemMcpError>> {
+        use futures::future::join_all;
+
+        let futures: Vec<_> = paths
+            .iter()
+            .map(|path| self.read_entire_file(path))
+            .collect();
+
+        join_all(futures).await
+    }
 }
 
 #[cfg(test)]
@@ -261,5 +276,177 @@ mod tests {
             result.unwrap_err(),
             FileSystemMcpError::PermissionDenied { .. }
         ));
+    }
+
+    #[tokio::test]
+    async fn test_read_files_success() {
+        let service = FileReaderService::new();
+
+        // Create multiple test files
+        let temp_file1 = create_test_file("content of file 1").await;
+        let temp_file2 = create_test_file("content of file 2").await;
+        let temp_file3 = create_test_file("content of file 3").await;
+
+        let paths = vec![
+            temp_file1.path().to_path_buf(),
+            temp_file2.path().to_path_buf(),
+            temp_file3.path().to_path_buf(),
+        ];
+
+        let results = service.read_files(&paths).await;
+
+        // All files should be read successfully
+        assert_eq!(results.len(), 3);
+        assert!(results[0].is_ok());
+        assert!(results[1].is_ok());
+        assert!(results[2].is_ok());
+
+        // Verify content
+        if let Ok(response) = &results[0] {
+            if let crate::models::responses::FileContent::Text(content) = &response.content {
+                assert_eq!(content, "content of file 1");
+            } else {
+                panic!("Expected text content");
+            }
+        }
+
+        if let Ok(response) = &results[1] {
+            if let crate::models::responses::FileContent::Text(content) = &response.content {
+                assert_eq!(content, "content of file 2");
+            } else {
+                panic!("Expected text content");
+            }
+        }
+
+        if let Ok(response) = &results[2] {
+            if let crate::models::responses::FileContent::Text(content) = &response.content {
+                assert_eq!(content, "content of file 3");
+            } else {
+                panic!("Expected text content");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_read_files_empty_list() {
+        let service = FileReaderService::new();
+        let paths: Vec<std::path::PathBuf> = vec![];
+
+        let results = service.read_files(&paths).await;
+
+        assert_eq!(results.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_read_files_mixed_success_and_failure() {
+        let service = FileReaderService::new();
+
+        // Create one valid file and one invalid path
+        let temp_file = create_test_file("valid content").await;
+        let nonexistent_path = std::path::PathBuf::from("/nonexistent/file.txt");
+
+        let paths = vec![temp_file.path().to_path_buf(), nonexistent_path];
+
+        let results = service.read_files(&paths).await;
+
+        // Should have results for both attempts
+        assert_eq!(results.len(), 2);
+
+        // First file should succeed
+        assert!(results[0].is_ok());
+        if let Ok(response) = &results[0] {
+            if let crate::models::responses::FileContent::Text(content) = &response.content {
+                assert_eq!(content, "valid content");
+            } else {
+                panic!("Expected text content");
+            }
+        }
+
+        // Second file should fail
+        assert!(results[1].is_err());
+        assert!(matches!(
+            results[1].as_ref().unwrap_err(),
+            FileSystemMcpError::PermissionDenied { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_read_files_all_failures() {
+        let service = FileReaderService::new();
+
+        let paths = vec![
+            std::path::PathBuf::from("/nonexistent/file1.txt"),
+            std::path::PathBuf::from("/nonexistent/file2.txt"),
+            std::path::PathBuf::from("/nonexistent/file3.txt"),
+        ];
+
+        let results = service.read_files(&paths).await;
+
+        // All should fail
+        assert_eq!(results.len(), 3);
+        assert!(results[0].is_err());
+        assert!(results[1].is_err());
+        assert!(results[2].is_err());
+
+        // Verify error types
+        for result in &results {
+            assert!(matches!(
+                result.as_ref().unwrap_err(),
+                FileSystemMcpError::PermissionDenied { .. }
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_read_files_single_file() {
+        let service = FileReaderService::new();
+        let temp_file = create_test_file("single file content").await;
+
+        let paths = vec![temp_file.path().to_path_buf()];
+
+        let results = service.read_files(&paths).await;
+
+        assert_eq!(results.len(), 1);
+        assert!(results[0].is_ok());
+
+        if let Ok(response) = &results[0] {
+            if let crate::models::responses::FileContent::Text(content) = &response.content {
+                assert_eq!(content, "single file content");
+            } else {
+                panic!("Expected text content");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_read_files_large_batch() {
+        let service = FileReaderService::new();
+
+        // Create 10 test files to test concurrent processing
+        let mut temp_files = Vec::new();
+        let mut paths = Vec::new();
+
+        for i in 0..10 {
+            let temp_file = create_test_file(&format!("content of file {}", i)).await;
+            paths.push(temp_file.path().to_path_buf());
+            temp_files.push(temp_file); // Keep files alive
+        }
+
+        let results = service.read_files(&paths).await;
+
+        // All files should be read successfully
+        assert_eq!(results.len(), 10);
+
+        for (i, result) in results.iter().enumerate() {
+            assert!(result.is_ok(), "File {} should be read successfully", i);
+
+            if let Ok(response) = result {
+                if let crate::models::responses::FileContent::Text(content) = &response.content {
+                    assert_eq!(content, &format!("content of file {}", i));
+                } else {
+                    panic!("Expected text content for file {}", i);
+                }
+            }
+        }
     }
 }

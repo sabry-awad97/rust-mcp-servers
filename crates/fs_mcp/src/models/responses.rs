@@ -59,7 +59,7 @@ impl ReadFileResponse {
 impl fmt::Display for ReadFileResponse {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.content {
-            FileContent::Text(text) => write!(f, "Text file ({}): {}", self.mime_type, text),
+            FileContent::Text(text) => write!(f, "{}", text),
             FileContent::Binary(base64) => {
                 write!(f, "Binary file ({}): {}", self.mime_type, base64)
             }

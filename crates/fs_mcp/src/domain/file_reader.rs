@@ -58,4 +58,16 @@ pub trait FileReader: Send + Sync {
     /// * `Ok(ReadMediaFileResponse)` - The complete file contents as base64 encoded data and MIME type
     /// * `Err(FileSystemMcpError)` - If the file cannot be read
     async fn read_media_file(&self, path: &Path) -> FileSystemMcpResult<ReadFileResponse>;
+
+    /// Read files concurrently using futures::join_all for scalability with many files
+    ///
+    /// # Arguments
+    /// * `paths` - A slice of file paths to read
+    ///
+    /// # Returns
+    /// * `Vec<FileSystemMcpResult<ReadFileResponse>>` - A vector of results for each file read operation
+    async fn read_files(
+        &self,
+        paths: &[std::path::PathBuf],
+    ) -> Vec<FileSystemMcpResult<crate::models::responses::ReadFileResponse>>;
 }

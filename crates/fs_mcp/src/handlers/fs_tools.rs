@@ -13,7 +13,7 @@ use crate::{
     application::FileReaderService,
     domain::FileReader,
     errors::{FileSystemMcpError, ToolResult},
-    models::requests::{ReadMediaFileRequest, ReadTextFileRequest},
+    models::requests::{ReadMediaFileRequest, ReadMultipleFilesRequest, ReadTextFileRequest},
     service::validation::{Validate, validate_path},
 };
 use std::sync::Arc;
@@ -42,7 +42,7 @@ impl FileSystemService {
 #[tool_router]
 impl FileSystemService {
     #[tool(
-        description = "Read the complete contents of a file from the file system as text. Only works within allowed directories."
+        description = "Read the complete contents of a file from the file system as text. Handles various text encodings and provides detailed error messages if the file cannot be read. Use this tool when you need to examine the contents of a single file. Use the 'head' parameter to read only the first N lines of a file, or the 'tail' parameter to read only the last N lines of a file. Operates on the file as text regardless of extension. Only works within allowed directories."
     )]
     async fn read_text_file(&self, Parameters(req): Parameters<ReadTextFileRequest>) -> ToolResult {
         // Validate request parameters
@@ -93,6 +93,46 @@ impl FileSystemService {
         let content = self.file_reader.read_media_file(&path).await?;
 
         Ok(CallToolResult::success(vec![content.into()]))
+    }
+
+    #[tool(
+        description = "Read the contents of multiple files simultaneously. This is more efficient than reading files one by one when you need to analyze or compare multiple files. Each file's content is returned with its path as a reference. Failed reads for individual files won't stop the entire operation. Only works within allowed directories."
+    )]
+    async fn read_multiple_files(
+        &self,
+        Parameters(req): Parameters<ReadMultipleFilesRequest>,
+    ) -> ToolResult {
+        req.validate()?;
+
+        // Validate all paths first
+        let mut validated_paths = Vec::new();
+        for path_str in &req.paths {
+            let path = validate_path(path_str, &self.allowed_directories).await?;
+            validated_paths.push(path);
+        }
+
+        // Read files concurrently
+        let results = self.file_reader.read_files(&validated_paths).await;
+
+        // Collect successful results and handle errors
+        let mut contents = Vec::new();
+        let mut errors = Vec::new();
+
+        for (result, path) in results.into_iter().zip(validated_paths.iter()) {
+            match result {
+                Ok(content) => contents.push(format!("{}:\n{}\n", path.display(), content)),
+                Err(e) => errors.push(format!("Error reading {}: {}", path.display(), e)),
+            }
+        }
+
+        // Add error summary if there were any errors
+        if !errors.is_empty() {
+            contents.push(format!("Errors encountered:\n{}", errors.join("\n")));
+        }
+
+        Ok(CallToolResult::success(vec![Content::text(
+            contents.join("\n---\n"),
+        )]))
     }
 }
 

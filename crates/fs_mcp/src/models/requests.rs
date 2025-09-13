@@ -64,3 +64,36 @@ impl Validate for ReadMediaFileRequest {
         Ok(())
     }
 }
+
+/// Request to read multiple files
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ReadMultipleFilesRequest {
+    /// Array of file paths to read
+    pub paths: Vec<String>,
+}
+
+impl Validate for ReadMultipleFilesRequest {
+    fn validate(&self) -> FileSystemMcpResult<()> {
+        if self.paths.is_empty() {
+            return Err(FileSystemMcpError::ValidationError {
+                message: "Invalid paths".to_string(),
+                path: self.paths.to_vec().join(", "),
+                operation: "validate".to_string(),
+                data: serde_json::json!({"error": "Paths are empty"}),
+            });
+        }
+
+        for path in &self.paths {
+            if path.is_empty() {
+                return Err(FileSystemMcpError::ValidationError {
+                    message: "Invalid path".to_string(),
+                    path: path.clone(),
+                    operation: "validate".to_string(),
+                    data: serde_json::json!({"error": "Path is empty"}),
+                });
+            }
+        }
+
+        Ok(())
+    }
+}
