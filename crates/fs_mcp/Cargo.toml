@@ -1,0 +1,38 @@
+[package]
+name = "mcp-server-filesystem"
+version = "0.1.0"
+edition = "2024"
+authors = ["Sabry Awad <dr.sabry1997@gmail.com>"]
+description = "A comprehensive Model Context Protocol (MCP) server for filesystem operations"
+documentation = "https://docs.rs/mcp-server-filesystem"
+readme = "README.md"
+homepage = "https://github.com/sabry-awad97/rust-mcp-servers"
+repository = "https://github.com/sabry-awad97/rust-mcp-servers"
+license = "MIT"
+keywords = ["mcp", "filesystem", "server", "protocol"]
+categories = ["date-and-time", "web-programming", "command-line-utilities"]
+exclude = ["target/", "*.log", ".env"]
+
+[[bin]]
+name = "mcp-server-filesystem"
+path = "src/main.rs"
+
+[dependencies]
+derive-getters = { workspace = true }
+rmcp = { workspace = true, features = ["transport-io", "server", "schemars"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = [
+    "env-filter",
+    "fmt",
+    "json",
+] }
+clap = { workspace = true, features = ["derive"] }
+
+[dev-dependencies]
+assert_cmd = { workspace = true }
+tempfile = { workspace = true }
+predicates = { workspace = true }
