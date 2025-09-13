@@ -136,3 +136,96 @@ impl Validate for WriteFileRequest {
         Ok(())
     }
 }
+
+/// Edit operation for file editing
+#[derive(Debug, Deserialize, schemars::JsonSchema, Getters)]
+pub struct EditOperation {
+    /// Text to search for - must match exactly
+    old_text: String,
+    /// Text to replace with
+    new_text: String,
+}
+
+impl EditOperation {
+    /// Create a new EditOperation instance
+    #[cfg(test)]
+    pub fn new(old_text: String, new_text: String) -> Self {
+        Self { old_text, new_text }
+    }
+}
+
+/// Request to edit a file
+#[derive(Debug, Deserialize, schemars::JsonSchema, Getters)]
+pub struct EditFileRequest {
+    /// Path to the file to edit
+    path: String,
+    /// Array of edit operations to perform
+    edits: Vec<EditOperation>,
+    /// Preview changes using git-style diff format
+    #[serde(default)]
+    dry_run: bool,
+}
+
+impl Validate for EditOperation {
+    fn validate(&self) -> Result<(), FileSystemMcpError> {
+        if self.old_text.is_empty() {
+            return Err(FileSystemMcpError::ValidationError {
+                message: "Invalid edit operation".to_string(),
+                path: "edit_operation".to_string(),
+                operation: "validate".to_string(),
+                data: serde_json::json!({"error": "old_text cannot be empty"}),
+            });
+        }
+
+        // Note: new_text can be empty (for deletions), so we don't validate it
+
+        // Validate that old_text doesn't contain only whitespace
+        if self.old_text.trim().is_empty() {
+            return Err(FileSystemMcpError::ValidationError {
+                message: "Invalid edit operation".to_string(),
+                path: "edit_operation".to_string(),
+                operation: "validate".to_string(),
+                data: serde_json::json!({"error": "old_text cannot contain only whitespace"}),
+            });
+        }
+
+        Ok(())
+    }
+}
+
+impl Validate for EditFileRequest {
+    fn validate(&self) -> Result<(), FileSystemMcpError> {
+        if self.path.trim().is_empty() {
+            return Err(FileSystemMcpError::ValidationError {
+                message: "Invalid path".to_string(),
+                path: self.path.clone(),
+                operation: "validate".to_string(),
+                data: serde_json::json!({"error": "Path is empty"}),
+            });
+        }
+
+        if self.edits.is_empty() {
+            return Err(FileSystemMcpError::ValidationError {
+                message: "No edit operations provided".to_string(),
+                path: self.path.clone(),
+                operation: "validate".to_string(),
+                data: serde_json::json!({"error": "Edits array is empty"}),
+            });
+        }
+
+        // Validate each edit operation
+        for (index, edit) in self.edits.iter().enumerate() {
+            edit.validate().map_err(|mut e| {
+                // Add context about which edit operation failed
+                if let FileSystemMcpError::ValidationError { ref mut data, .. } = e
+                    && let Some(obj) = data.as_object_mut()
+                {
+                    obj.insert("edit_index".to_string(), serde_json::json!(index));
+                }
+                e
+            })?;
+        }
+
+        Ok(())
+    }
+}

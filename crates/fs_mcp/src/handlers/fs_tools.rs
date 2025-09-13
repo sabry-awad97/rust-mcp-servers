@@ -14,7 +14,8 @@ use crate::{
     domain::{FileReader, FileWriter},
     errors::{FileSystemMcpError, ToolResult},
     models::requests::{
-        ReadMediaFileRequest, ReadMultipleFilesRequest, ReadTextFileRequest, WriteFileRequest,
+        EditFileRequest, ReadMediaFileRequest, ReadMultipleFilesRequest, ReadTextFileRequest,
+        WriteFileRequest,
     },
     service::validation::{Validate, validate_path},
 };
@@ -148,6 +149,19 @@ impl FileSystemService {
         let result = self
             .file_writer
             .write_file(&valid_path, req.content())
+            .await?;
+        Ok(CallToolResult::success(vec![result.into()]))
+    }
+
+    #[tool(
+        description = "Make line-based edits to a text file. Each edit replaces exact line sequences with new content. Returns a git-style diff showing the changes made. Only works within allowed directories."
+    )]
+    async fn edit_file(&self, Parameters(req): Parameters<EditFileRequest>) -> ToolResult {
+        req.validate()?;
+        let valid_path = validate_path(req.path(), &self.allowed_directories).await?;
+        let result = self
+            .file_writer
+            .apply_file_edits(&valid_path, req.edits(), req.dry_run())
             .await?;
         Ok(CallToolResult::success(vec![result.into()]))
     }

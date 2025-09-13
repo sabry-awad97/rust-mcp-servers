@@ -40,6 +40,11 @@ impl FileWriterService {
         }
         Ok(())
     }
+
+    /// Normalize line endings to Unix format (\n)
+    fn normalize_line_endings(text: &str) -> String {
+        text.replace("\r\n", "\n")
+    }
 }
 
 impl Default for FileWriterService {
@@ -156,6 +161,144 @@ impl FileWriter for FileWriterService {
 
         let size = content.len() as u64;
         Ok(WriteFileResponse::file_written(path, size, !file_existed))
+    }
+
+    async fn apply_file_edits(
+        &self,
+        path: &Path,
+        edits: &[crate::models::requests::EditOperation],
+        dry_run: &bool,
+    ) -> FileSystemMcpResult<WriteFileResponse> {
+        // Read and normalize file content
+        let original_content =
+            fs::read_to_string(path)
+                .await
+                .map_err(|e| FileSystemMcpError::IoError {
+                    message: format!("Failed to read file for editing: {}", e),
+                    path: path.display().to_string(),
+                })?;
+
+        let mut modified_content = Self::normalize_line_endings(&original_content);
+
+        // Apply edits sequentially
+        for edit in edits {
+            let normalized_old = Self::normalize_line_endings(edit.old_text());
+            let normalized_new = Self::normalize_line_endings(edit.new_text());
+
+            // Try exact match first
+            if modified_content.contains(&normalized_old) {
+                modified_content = modified_content.replacen(&normalized_old, &normalized_new, 1);
+                continue;
+            }
+
+            // Try line-by-line matching with whitespace flexibility
+            let old_lines: Vec<&str> = normalized_old.split('\n').collect();
+            let content_lines: Vec<&str> = modified_content.split('\n').collect();
+            let mut match_found = false;
+
+            for i in 0..=(content_lines.len().saturating_sub(old_lines.len())) {
+                if i + old_lines.len() > content_lines.len() {
+                    break;
+                }
+
+                let potential_match = &content_lines[i..i + old_lines.len()];
+
+                // Compare lines with normalized whitespace
+                let is_match = old_lines
+                    .iter()
+                    .zip(potential_match.iter())
+                    .all(|(old_line, content_line)| old_line.trim() == content_line.trim());
+
+                if is_match {
+                    // Preserve original indentation of first line
+                    let original_indent = content_lines[i]
+                        .chars()
+                        .take_while(|c| c.is_whitespace())
+                        .collect::<String>();
+
+                    // Calculate the base indentation of the new text (from first non-empty line)
+                    let new_text_lines: Vec<&str> = normalized_new.split('\n').collect();
+                    let base_new_indent = new_text_lines
+                        .iter()
+                        .find(|line| !line.trim().is_empty())
+                        .map(|line| {
+                            line.chars()
+                                .take_while(|c| c.is_whitespace())
+                                .collect::<String>()
+                        })
+                        .unwrap_or_default();
+
+                    let new_lines: Vec<String> = new_text_lines
+                        .iter()
+                        .enumerate()
+                        .map(|(j, line)| {
+                            if j == 0 {
+                                // First line: use original indentation
+                                format!("{}{}", original_indent, line.trim_start())
+                            } else if line.trim().is_empty() {
+                                // Empty lines remain empty
+                                String::new()
+                            } else {
+                                // Subsequent lines: preserve relative indentation structure
+                                let line_indent = line
+                                    .chars()
+                                    .take_while(|c| c.is_whitespace())
+                                    .collect::<String>();
+
+                                // Calculate relative indentation from the base indentation of new text
+                                let relative_indent_size =
+                                    if line_indent.len() >= base_new_indent.len() {
+                                        line_indent.len() - base_new_indent.len()
+                                    } else {
+                                        0
+                                    };
+
+                                format!(
+                                    "{}{}{}",
+                                    original_indent,
+                                    " ".repeat(relative_indent_size),
+                                    line.trim_start()
+                                )
+                            }
+                        })
+                        .collect();
+
+                    // Replace the matched lines
+                    let mut new_content_lines = content_lines[..i].to_vec();
+                    new_content_lines.extend(new_lines.iter().map(|s| s.as_str()));
+                    new_content_lines.extend(&content_lines[i + old_lines.len()..]);
+
+                    modified_content = new_content_lines.join("\n");
+                    match_found = true;
+                    break;
+                }
+            }
+
+            if !match_found {
+                return Err(FileSystemMcpError::ValidationError {
+                    message: "Could not find exact match for edit".to_string(),
+                    path: path.display().to_string(),
+                    operation: "apply_edit".to_string(),
+                    data: serde_json::json!({
+                        "error": "No matching text found",
+                        "old_text": edit.old_text()
+                    }),
+                });
+            }
+        }
+
+        if *dry_run {
+            // Return preview without modifying file
+            Ok(WriteFileResponse::new(
+                format!("Dry run completed. {} edits would be applied.", edits.len()),
+                path.display().to_string(),
+                Some(modified_content.len() as u64),
+                false,
+            ))
+        } else {
+            // Apply changes using secure write
+            self.write_file(path, &modified_content).await
+        }
     }
 
     async fn append_to_file(
@@ -780,5 +923,352 @@ mod tests {
         // Verify content
         let written_content = fs::read_to_string(&no_ext_path).await.unwrap();
         assert_eq!(written_content, new_content);
+    }
+
+    #[tokio::test]
+    async fn test_apply_file_edits_exact_match() {
+        use crate::models::requests::EditOperation;
+
+        let service = FileWriterService::new();
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let file_path = temp_dir.path().join("test_edit.txt");
+
+        let original_content = "Hello world\nThis is a test\nEnd of file";
+        fs::write(&file_path, original_content).await.unwrap();
+
+        let edits = vec![EditOperation::new(
+            "Hello world".to_string(),
+            "Hello Rust".to_string(),
+        )];
+
+        let result = service.apply_file_edits(&file_path, &edits, &false).await;
+        assert!(result.is_ok());
+
+        let final_content = fs::read_to_string(&file_path).await.unwrap();
+        assert_eq!(final_content, "Hello Rust\nThis is a test\nEnd of file");
+    }
+
+    #[tokio::test]
+    async fn test_apply_file_edits_whitespace_flexible() {
+        use crate::models::requests::EditOperation;
+
+        let service = FileWriterService::new();
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let file_path = temp_dir.path().join("test_whitespace.txt");
+
+        let original_content = "    function test() {\n        return true;\n    }";
+        fs::write(&file_path, original_content).await.unwrap();
+
+        let edits = vec![EditOperation::new(
+            "function test() {\n    return true;\n}".to_string(),
+            "function test() {\n    return false;\n}".to_string(),
+        )];
+
+        let result = service.apply_file_edits(&file_path, &edits, &false).await;
+        assert!(result.is_ok());
+
+        let final_content = fs::read_to_string(&file_path).await.unwrap();
+        assert_eq!(
+            final_content,
+            "    function test() {\n        return false;\n    }"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_apply_file_edits_preserve_indentation() {
+        use crate::models::requests::EditOperation;
+
+        let service = FileWriterService::new();
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let file_path = temp_dir.path().join("test_indent.txt");
+
+        let original_content =
+            "class Test {\n    method1() {\n        console.log('test');\n    }\n}";
+        fs::write(&file_path, original_content).await.unwrap();
+
+        let edits = vec![EditOperation::new(
+            "method1() {\n    console.log('test');\n}".to_string(),
+            "method1() {\n    console.log('updated');\n    return true;\n}".to_string(),
+        )];
+
+        let result = service.apply_file_edits(&file_path, &edits, &false).await;
+        assert!(result.is_ok());
+
+        let final_content = fs::read_to_string(&file_path).await.unwrap();
+        assert_eq!(
+            final_content,
+            "class Test {\n    method1() {\n        console.log('updated');\n        return true;\n    }\n}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_apply_file_edits_multiple_edits() {
+        use crate::models::requests::EditOperation;
+
+        let service = FileWriterService::new();
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let file_path = temp_dir.path().join("test_multiple.txt");
+
+        let original_content = "let x = 1;\nlet y = 2;\nlet z = 3;";
+        fs::write(&file_path, original_content).await.unwrap();
+
+        let edits = vec![
+            EditOperation::new("let x = 1;".to_string(), "let x = 10;".to_string()),
+            EditOperation::new("let y = 2;".to_string(), "let y = 20;".to_string()),
+            EditOperation::new("let z = 3;".to_string(), "let z = 30;".to_string()),
+        ];
+
+        let result = service.apply_file_edits(&file_path, &edits, &false).await;
+        assert!(result.is_ok());
+
+        let final_content = fs::read_to_string(&file_path).await.unwrap();
+        assert_eq!(final_content, "let x = 10;\nlet y = 20;\nlet z = 30;");
+    }
+
+    #[tokio::test]
+    async fn test_apply_file_edits_dry_run() {
+        use crate::models::requests::EditOperation;
+
+        let service = FileWriterService::new();
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let file_path = temp_dir.path().join("test_dry_run.txt");
+
+        let original_content = "Hello world";
+        fs::write(&file_path, original_content).await.unwrap();
+
+        let edits = vec![EditOperation::new("Hello".to_string(), "Hi".to_string())];
+
+        let result = service.apply_file_edits(&file_path, &edits, &true).await;
+        assert!(result.is_ok());
+
+        let response = result.unwrap();
+        assert!(response.message.contains("Dry run completed"));
+        assert!(response.message.contains("1 edits would be applied"));
+
+        // Verify original file unchanged
+        let unchanged_content = fs::read_to_string(&file_path).await.unwrap();
+        assert_eq!(unchanged_content, original_content);
+    }
+
+    #[tokio::test]
+    async fn test_apply_file_edits_line_ending_normalization() {
+        use crate::models::requests::EditOperation;
+
+        let service = FileWriterService::new();
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let file_path = temp_dir.path().join("test_line_endings.txt");
+
+        // Create file with Windows line endings
+        let original_content = "Hello\r\nWorld\r\nTest";
+        fs::write(&file_path, original_content).await.unwrap();
+
+        let edits = vec![EditOperation::new(
+            "Hello\nWorld".to_string(), // Unix line endings in edit
+            "Hi\nEveryone".to_string(),
+        )];
+
+        let result = service.apply_file_edits(&file_path, &edits, &false).await;
+        assert!(result.is_ok());
+
+        let final_content = fs::read_to_string(&file_path).await.unwrap();
+        assert_eq!(final_content, "Hi\nEveryone\nTest");
+    }
+
+    #[tokio::test]
+    async fn test_apply_file_edits_deletion() {
+        use crate::models::requests::EditOperation;
+
+        let service = FileWriterService::new();
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let file_path = temp_dir.path().join("test_deletion.txt");
+
+        let original_content = "Keep this line\nDelete this line\nKeep this too";
+        fs::write(&file_path, original_content).await.unwrap();
+
+        let edits = vec![EditOperation::new(
+            "Delete this line\n".to_string(), // Empty string for deletion
+            "".to_string(),
+        )];
+
+        let result = service.apply_file_edits(&file_path, &edits, &false).await;
+        assert!(result.is_ok());
+
+        let final_content = fs::read_to_string(&file_path).await.unwrap();
+        assert_eq!(final_content, "Keep this line\nKeep this too");
+    }
+
+    #[tokio::test]
+    async fn test_apply_file_edits_insertion() {
+        use crate::models::requests::EditOperation;
+
+        let service = FileWriterService::new();
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let file_path = temp_dir.path().join("test_insertion.txt");
+
+        let original_content = "Line 1\nLine 3";
+        fs::write(&file_path, original_content).await.unwrap();
+
+        let edits = vec![EditOperation::new(
+            "Line 1\nLine 3".to_string(),
+            "Line 1\nLine 2\nLine 3".to_string(),
+        )];
+
+        let result = service.apply_file_edits(&file_path, &edits, &false).await;
+        assert!(result.is_ok());
+
+        let final_content = fs::read_to_string(&file_path).await.unwrap();
+        assert_eq!(final_content, "Line 1\nLine 2\nLine 3");
+    }
+
+    #[tokio::test]
+    async fn test_apply_file_edits_no_match_error() {
+        use crate::models::requests::EditOperation;
+
+        let service = FileWriterService::new();
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let file_path = temp_dir.path().join("test_no_match.txt");
+
+        let original_content = "Hello world";
+        fs::write(&file_path, original_content).await.unwrap();
+
+        let edits = vec![EditOperation::new(
+            "Goodbye world".to_string(), // This doesn't exist
+            "Hi world".to_string(),
+        )];
+
+        let result = service.apply_file_edits(&file_path, &edits, &false).await;
+        assert!(result.is_err());
+
+        if let Err(FileSystemMcpError::ValidationError { message, .. }) = result {
+            assert!(message.contains("Could not find exact match"));
+        } else {
+            panic!("Expected ValidationError");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_apply_file_edits_complex_indentation() {
+        use crate::models::requests::EditOperation;
+
+        let service = FileWriterService::new();
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let file_path = temp_dir.path().join("test_complex_indent.txt");
+
+        let original_content =
+            "    if (condition) {\n        doSomething();\n        doMore();\n    }";
+        fs::write(&file_path, original_content).await.unwrap();
+
+        let edits = vec![EditOperation::new(
+            "if (condition) {\n    doSomething();\n    doMore();\n}".to_string(),
+            "if (condition) {\n    doSomething();\n    doMore();\n    doEvenMore();\n}".to_string(),
+        )];
+
+        let result = service.apply_file_edits(&file_path, &edits, &false).await;
+        assert!(result.is_ok());
+
+        let final_content = fs::read_to_string(&file_path).await.unwrap();
+        assert_eq!(
+            final_content,
+            "    if (condition) {\n        doSomething();\n        doMore();\n        doEvenMore();\n    }"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_apply_file_edits_empty_file() {
+        use crate::models::requests::EditOperation;
+
+        let service = FileWriterService::new();
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let file_path = temp_dir.path().join("test_empty.txt");
+
+        fs::write(&file_path, "").await.unwrap();
+
+        let edits = vec![EditOperation::new(
+            "".to_string(),
+            "Hello world".to_string(),
+        )];
+
+        let result = service.apply_file_edits(&file_path, &edits, &false).await;
+        assert!(result.is_ok());
+
+        let final_content = fs::read_to_string(&file_path).await.unwrap();
+        assert_eq!(final_content, "Hello world");
+    }
+
+    #[tokio::test]
+    async fn test_apply_file_edits_unicode_content() {
+        use crate::models::requests::EditOperation;
+
+        let service = FileWriterService::new();
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let file_path = temp_dir.path().join("test_unicode.txt");
+
+        let original_content = "Hello 世界\nRust is 🦀";
+        fs::write(&file_path, original_content).await.unwrap();
+
+        let edits = vec![EditOperation::new(
+            "Hello 世界".to_string(),
+            "你好 World".to_string(),
+        )];
+
+        let result = service.apply_file_edits(&file_path, &edits, &false).await;
+        assert!(result.is_ok());
+
+        let final_content = fs::read_to_string(&file_path).await.unwrap();
+        assert_eq!(final_content, "你好 World\nRust is 🦀");
+    }
+
+    #[tokio::test]
+    async fn test_apply_file_edits_sequential_dependency() {
+        use crate::models::requests::EditOperation;
+
+        let service = FileWriterService::new();
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let file_path = temp_dir.path().join("test_sequential.txt");
+
+        let original_content = "Step 1\nStep 2\nStep 3";
+        fs::write(&file_path, original_content).await.unwrap();
+
+        // Each edit depends on the result of the previous one
+        let edits = vec![
+            EditOperation::new("Step 1".to_string(), "Phase 1".to_string()),
+            EditOperation::new(
+                "Phase 1\nStep 2".to_string(),
+                "Phase 1\nPhase 2".to_string(),
+            ),
+            EditOperation::new(
+                "Phase 2\nStep 3".to_string(),
+                "Phase 2\nPhase 3".to_string(),
+            ),
+        ];
+
+        let result = service.apply_file_edits(&file_path, &edits, &false).await;
+        assert!(result.is_ok());
+
+        let final_content = fs::read_to_string(&file_path).await.unwrap();
+        assert_eq!(final_content, "Phase 1\nPhase 2\nPhase 3");
+    }
+
+    #[tokio::test]
+    async fn test_apply_file_edits_nonexistent_file() {
+        use crate::models::requests::EditOperation;
+
+        let service = FileWriterService::new();
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let file_path = temp_dir.path().join("nonexistent.txt");
+
+        let edits = vec![EditOperation::new(
+            "test".to_string(),
+            "updated".to_string(),
+        )];
+
+        let result = service.apply_file_edits(&file_path, &edits, &false).await;
+        assert!(result.is_err());
+
+        if let Err(FileSystemMcpError::IoError { message, .. }) = result {
+            assert!(message.contains("Failed to read file for editing"));
+        } else {
+            panic!("Expected IoError");
+        }
     }
 }

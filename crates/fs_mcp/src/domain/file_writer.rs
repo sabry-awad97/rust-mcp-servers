@@ -105,4 +105,21 @@ pub trait FileWriter: Send + Sync {
         path: &Path,
         data: &[u8],
     ) -> FileSystemMcpResult<WriteFileResponse>;
+
+    /// Apply multiple edit operations to a file
+    ///
+    /// # Arguments
+    /// * `path` - The file path to edit
+    /// * `edits` - Array of edit operations to apply
+    /// * `dry_run` - If true, return preview without modifying file
+    ///
+    /// # Returns
+    /// * `Ok(WriteFileResponse)` - Success response with edit information
+    /// * `Err(FileSystemMcpError)` - If the edits cannot be applied
+    async fn apply_file_edits(
+        &self,
+        path: &Path,
+        edits: &[crate::models::requests::EditOperation],
+        dry_run: &bool,
+    ) -> FileSystemMcpResult<WriteFileResponse>;
 }
