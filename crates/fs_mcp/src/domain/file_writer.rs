@@ -24,21 +24,6 @@ pub trait FileWriter: Send + Sync {
         content: &str,
     ) -> FileSystemMcpResult<WriteFileResponse>;
 
-    /// Append content to an existing file
-    ///
-    /// # Arguments
-    /// * `path` - The file path to append to
-    /// * `content` - The content to append to the file
-    ///
-    /// # Returns
-    /// * `Ok(WriteFileResponse)` - Success response with file information
-    /// * `Err(FileSystemMcpError)` - If the file cannot be written
-    async fn append_to_file(
-        &self,
-        path: &Path,
-        content: &str,
-    ) -> FileSystemMcpResult<WriteFileResponse>;
-
     /// Create a new directory and all necessary parent directories
     ///
     /// # Arguments

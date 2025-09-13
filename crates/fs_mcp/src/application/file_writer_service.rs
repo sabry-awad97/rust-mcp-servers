@@ -301,64 +301,6 @@ impl FileWriter for FileWriterService {
         }
     }
 
-    async fn append_to_file(
-        &self,
-        path: &Path,
-        content: &str,
-    ) -> FileSystemMcpResult<WriteFileResponse> {
-        use tokio::io::AsyncWriteExt;
-
-        let file_existed = self.path_exists(path).await;
-
-        // Ensure parent directory exists
-        self.ensure_parent_dir(path)
-            .await
-            .map_err(|e| FileSystemMcpError::IoError {
-                message: format!("Failed to create parent directory: {}", e),
-                path: path.display().to_string(),
-            })?;
-
-        // Open file in append mode
-        let mut file = fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)
-            .await
-            .map_err(|e| FileSystemMcpError::IoError {
-                message: format!("Failed to open file for appending: {}", e),
-                path: path.display().to_string(),
-            })?;
-
-        // Write content
-        file.write_all(content.as_bytes())
-            .await
-            .map_err(|e| FileSystemMcpError::IoError {
-                message: format!("Failed to append to file: {}", e),
-                path: path.display().to_string(),
-            })?;
-
-        file.flush()
-            .await
-            .map_err(|e| FileSystemMcpError::IoError {
-                message: format!("Failed to flush file: {}", e),
-                path: path.display().to_string(),
-            })?;
-
-        let total_size =
-            self.get_file_size(path)
-                .await
-                .map_err(|e| FileSystemMcpError::IoError {
-                    message: format!("Failed to get file size: {}", e),
-                    path: path.display().to_string(),
-                })?;
-
-        Ok(WriteFileResponse::file_written(
-            path,
-            total_size,
-            !file_existed,
-        ))
-    }
-
     async fn create_directory(&self, path: &Path) -> FileSystemMcpResult<WriteFileResponse> {
         fs::create_dir_all(path)
             .await
@@ -539,25 +481,6 @@ mod tests {
         // Verify file was overwritten
         let written_content = fs::read_to_string(temp_file.path()).await.unwrap();
         assert_eq!(written_content, new_content);
-    }
-
-    #[tokio::test]
-    async fn test_append_to_file() {
-        let service = FileWriterService::new();
-        let temp_file = create_temp_file_with_content("original").await;
-        let append_content = " appended";
-
-        let result = service
-            .append_to_file(temp_file.path(), append_content)
-            .await;
-        assert!(result.is_ok());
-
-        let response = result.unwrap();
-        assert!(!response.created); // File already existed
-
-        // Verify content was appended
-        let final_content = fs::read_to_string(temp_file.path()).await.unwrap();
-        assert_eq!(final_content, "original appended");
     }
 
     #[tokio::test]

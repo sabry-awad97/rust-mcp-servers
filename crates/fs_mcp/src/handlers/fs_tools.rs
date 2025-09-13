@@ -14,8 +14,8 @@ use crate::{
     domain::{FileReader, FileWriter},
     errors::{FileSystemMcpError, ToolResult},
     models::requests::{
-        EditFileRequest, ReadMediaFileRequest, ReadMultipleFilesRequest, ReadTextFileRequest,
-        WriteFileRequest,
+        CreateDirectoryRequest, EditFileRequest, ReadMediaFileRequest, ReadMultipleFilesRequest,
+        ReadTextFileRequest, WriteFileRequest,
     },
     service::validation::{Validate, validate_path},
 };
@@ -163,6 +163,19 @@ impl FileSystemService {
             .file_writer
             .apply_file_edits(&valid_path, req.edits(), req.dry_run())
             .await?;
+        Ok(CallToolResult::success(vec![result.into()]))
+    }
+
+    #[tool(
+        description = "Create a new directory or ensure a directory exists. Can create multiple nested directories in one operation. If the directory already exists, this operation will succeed silently. Perfect for setting up directory structures for projects or ensuring required paths exist. Only works within allowed directories."
+    )]
+    async fn create_directory(
+        &self,
+        Parameters(req): Parameters<CreateDirectoryRequest>,
+    ) -> ToolResult {
+        req.validate()?;
+        let valid_path = validate_path(req.path(), &self.allowed_directories).await?;
+        let result = self.file_writer.create_directory(&valid_path).await?;
         Ok(CallToolResult::success(vec![result.into()]))
     }
 }

@@ -229,3 +229,27 @@ impl Validate for EditFileRequest {
         Ok(())
     }
 }
+
+/// Request to create a directory
+#[derive(Debug, Deserialize, schemars::JsonSchema, Getters)]
+pub struct CreateDirectoryRequest {
+    /// Path to the directory to create
+    path: String,
+}
+
+impl Validate for CreateDirectoryRequest {
+    fn validate(&self) -> FileSystemMcpResult<()> {
+        if self.path.trim().is_empty() {
+            return Err(FileSystemMcpError::ValidationError {
+                message: "Invalid path".to_string(),
+                path: self.path.clone(),
+                operation: "create_directory".to_string(),
+                data: serde_json::json!({
+                    "error": "Path cannot be empty",
+                    "provided_path": self.path
+                }),
+            });
+        }
+        Ok(())
+    }
+}
