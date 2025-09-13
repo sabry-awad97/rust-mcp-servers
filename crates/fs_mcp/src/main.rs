@@ -1,7 +1,7 @@
-#![allow(unused)]
-
+mod application;
 mod cli;
 mod config;
+mod domain;
 mod errors;
 mod handlers;
 mod models;

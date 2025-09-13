@@ -1,3 +1,4 @@
+use core::fmt;
 use std::path::PathBuf;
 
 use rmcp::{
@@ -8,22 +9,31 @@ use rmcp::{
     tool, tool_handler, tool_router,
 };
 
-use crate::{errors::ToolResult, models::requests::ReadTextFileRequest};
+use crate::{
+    application::FileReaderService,
+    domain::FileReader,
+    errors::{FileSystemMcpError, ToolResult},
+    models::requests::ReadTextFileRequest,
+    service::validation::{Validate, validate_path},
+};
+use std::sync::Arc;
 
 /// Filesystem MCP Service
 ///
 /// Provides secure filesystem operations through the MCP protocol
-#[derive(Debug)]
+/// Uses dependency injection for file reading operations
 pub struct FileSystemService {
     allowed_directories: Vec<PathBuf>,
+    file_reader: Arc<dyn FileReader>,
     tool_router: ToolRouter<FileSystemService>,
 }
 
 impl FileSystemService {
-    /// Create a new FileSystemService with the given configuration
+    /// Create a new FileSystemService with the given configuration and file reader
     pub fn new(allowed_directories: Vec<PathBuf>) -> Self {
         Self {
             allowed_directories,
+            file_reader: Arc::new(FileReaderService::new()),
             tool_router: Self::tool_router(),
         }
     }
@@ -33,9 +43,44 @@ impl FileSystemService {
 impl FileSystemService {
     #[tool(description = "Read the complete contents of a file from the file system as text")]
     async fn read_text_file(&self, Parameters(req): Parameters<ReadTextFileRequest>) -> ToolResult {
-        unimplemented!("Read text file not implemented yet {req:?}")
+        // Validate request parameters
+        req.validate()?;
+
+        // Validate and resolve the file path
+        let path = validate_path(req.path(), &self.allowed_directories).await?;
+
+        // Read file content based on request parameters using injected file reader
+        let content = match (req.head(), req.tail()) {
+            (Some(head_lines), None) => {
+                // Return the first N lines of the file
+                self.file_reader.read_file_head(&path, *head_lines).await?
+            }
+            (None, Some(tail_lines)) => {
+                // Return the last N lines of the file
+                self.file_reader.read_file_tail(&path, *tail_lines).await?
+            }
+            (None, None) => {
+                // Return the entire file
+                self.file_reader.read_entire_file(&path).await?
+            }
+            (Some(_), Some(_)) => {
+                // This should be caught by validation, but handle gracefully
+                return Err(FileSystemMcpError::ValidationError {
+                    message: "Cannot specify both head and tail parameters".to_string(),
+                    path: path.display().to_string(),
+                    operation: "read_text_file".to_string(),
+                    data: serde_json::json!({"error": "Conflicting parameters"}),
+                }
+                .into());
+            }
+        };
+
+        Ok(CallToolResult::success(vec![Content::text(content)]))
     }
 }
+
+// File reading operations are now handled by the injected FileReader service
+// This follows the Single Responsibility Principle and Dependency Inversion Principle
 
 #[tool_handler]
 impl ServerHandler for FileSystemService {
@@ -57,5 +102,13 @@ impl ServerHandler for FileSystemService {
     ) -> Result<InitializeResult, McpError> {
         tracing::info!("FileSystem MCP Server initialized successfully");
         Ok(self.get_info())
+    }
+}
+
+impl fmt::Debug for FileSystemService {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FileSystemService")
+            .field("allowed_directories", &self.allowed_directories)
+            .finish()
     }
 }

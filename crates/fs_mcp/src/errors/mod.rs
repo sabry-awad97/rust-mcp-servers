@@ -12,8 +12,6 @@ pub type ToolResult = McpResult<rmcp::model::CallToolResult>;
 /// CLI-related errors
 #[derive(thiserror::Error, Debug)]
 pub enum FileSystemMcpError {
-    #[error("Invalid directory path: {path}")]
-    InvalidDirectory { path: String },
     #[error("Directory does not exist: {path}")]
     DirectoryNotFound { path: String },
     #[error("Permission denied for directory: {path}")]
@@ -22,15 +20,17 @@ pub enum FileSystemMcpError {
     #[error("Logging initialization failed: {0}")]
     LoggingInitialization(String),
     #[error("Configuration validation failed: {message}")]
-    ValidationError { message: String },
+    ValidationError {
+        message: String,
+        path: String,
+        operation: String,
+        data: serde_json::Value,
+    },
 }
 
 impl From<FileSystemMcpError> for McpError {
     fn from(err: FileSystemMcpError) -> Self {
         match err {
-            FileSystemMcpError::InvalidDirectory { path } => {
-                McpError::invalid_params(format!("Invalid directory path: {}", path), None)
-            }
             FileSystemMcpError::DirectoryNotFound { path } => {
                 McpError::resource_not_found(format!("Directory does not exist: {}", path), None)
             }
@@ -41,9 +41,19 @@ impl From<FileSystemMcpError> for McpError {
             FileSystemMcpError::LoggingInitialization(msg) => {
                 McpError::internal_error(format!("Logging initialization failed: {}", msg), None)
             }
-            FileSystemMcpError::ValidationError { message } => McpError::invalid_params(
-                format!("Configuration validation failed: {}", message),
-                None,
+            FileSystemMcpError::ValidationError {
+                message,
+                path,
+                operation,
+                data,
+            } => McpError::invalid_params(
+                "invalid_path",
+                Some(serde_json::json!({
+                    "error": message,
+                    "operation": operation,
+                    "path": path,
+                    "data": data
+                })),
             ),
         }
     }

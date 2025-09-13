@@ -42,145 +42,12 @@
 //! All functions return [`FileSystemMcpResult`] which provides detailed error information:
 //! - [`FileSystemMcpError::DirectoryNotFound`] - Path does not exist
 //! - [`FileSystemMcpError::PermissionDenied`] - Access denied or path outside allowed directories
-//! - [`FileSystemMcpError::InvalidDirectory`] - Path exists but is not a directory
 //! - [`FileSystemMcpError::ValidationError`] - Configuration or validation failure
 
 use std::path::PathBuf;
 use tokio::fs;
 
 use crate::errors::{FileSystemMcpError, FileSystemMcpResult};
-
-/// Validate that a path is within allowed directories
-///
-/// This function performs comprehensive security validation by canonicalizing the input path
-/// and ensuring it falls within one of the allowed directories. It prevents path traversal
-/// attacks and ensures all operations stay within security boundaries.
-///
-/// # Arguments
-///
-/// * `path` - The filesystem path to validate (can be relative or absolute)
-/// * `allowed_directories` - Slice of canonical directory paths that are permitted
-///
-/// # Returns
-///
-/// * `Ok(PathBuf)` - The canonical form of the validated path
-/// * `Err(FileSystemMcpError)` - If validation fails
-///
-/// # Errors
-///
-/// * [`FileSystemMcpError::DirectoryNotFound`] - If the path does not exist
-/// * [`FileSystemMcpError::PermissionDenied`] - If path exists but cannot be accessed,
-///   or if the path is outside allowed directories
-///
-/// # Security
-///
-/// This function implements multiple security layers:
-/// - Path canonicalization to resolve symbolic links and relative components
-/// - Boundary checking against allowed directories
-/// - Permission validation
-///
-/// # Examples
-///
-/// ```rust
-/// use std::path::PathBuf;
-/// use crate::utils::fs::validate_path;
-///
-/// let allowed_dirs = vec![PathBuf::from("/safe/directory")];
-/// let file_path = PathBuf::from("/safe/directory/file.txt");
-///
-/// match validate_path(&file_path, &allowed_dirs).await {
-///     Ok(canonical_path) => println!("Valid path: {}", canonical_path.display()),
-///     Err(e) => eprintln!("Validation failed: {}", e),
-/// }
-/// ```
-pub async fn validate_path(
-    path: &std::path::Path,
-    allowed_directories: &[PathBuf],
-) -> FileSystemMcpResult<PathBuf> {
-    let path_owned = path.to_path_buf();
-
-    let canonical_path = tokio::task::spawn_blocking(move || {
-        path_owned.canonicalize().map_err(|_| {
-            if path_owned.exists() {
-                FileSystemMcpError::PermissionDenied {
-                    path: path_owned.display().to_string(),
-                }
-            } else {
-                FileSystemMcpError::DirectoryNotFound {
-                    path: path_owned.display().to_string(),
-                }
-            }
-        })
-    })
-    .await
-    .map_err(|_| FileSystemMcpError::ValidationError {
-        message: "Path canonicalization task failed".to_string(),
-    })??;
-
-    if !is_path_allowed(&canonical_path, allowed_directories).await {
-        return Err(FileSystemMcpError::PermissionDenied {
-            path: canonical_path.display().to_string(),
-        });
-    }
-
-    Ok(canonical_path)
-}
-
-/// Check if a given path is within allowed directories
-///
-/// This function performs a security check to determine if a path falls within
-/// the boundaries of allowed directories. It canonicalizes the path and checks
-/// if it starts with any of the allowed directory paths.
-///
-/// # Arguments
-///
-/// * `path` - The filesystem path to check (will be canonicalized)
-/// * `allowed_directories` - Slice of canonical directory paths that are permitted
-///
-/// # Returns
-///
-/// * `true` - If the path is within allowed directories
-/// * `false` - If the path is outside allowed directories or cannot be canonicalized
-///
-/// # Security Notes
-///
-/// - Returns `false` for any path that cannot be canonicalized (fail-safe behavior)
-/// - Uses canonical path comparison to prevent symbolic link attacks
-/// - Implements prefix matching to allow subdirectory access
-///
-/// # Examples
-///
-/// ```rust
-/// use std::path::PathBuf;
-/// use crate::utils::fs::is_path_allowed;
-///
-/// let allowed_dirs = vec![PathBuf::from("/safe/directory")];
-///
-/// // This will return true (within allowed directory)
-/// let safe_file = PathBuf::from("/safe/directory/file.txt");
-/// assert!(is_path_allowed(&safe_file, &allowed_dirs).await);
-///
-/// // This will return false (outside allowed directory)
-/// let unsafe_file = PathBuf::from("/etc/passwd");
-/// assert!(!is_path_allowed(&unsafe_file, &allowed_dirs).await);
-/// ```
-pub async fn is_path_allowed(path: &std::path::Path, allowed_directories: &[PathBuf]) -> bool {
-    let path_owned = path.to_path_buf();
-    let allowed_dirs_owned = allowed_directories.to_vec();
-
-    tokio::task::spawn_blocking(move || {
-        let canonical_path = match path_owned.canonicalize() {
-            Ok(p) => p,
-            Err(_) => return false,
-        };
-
-        allowed_dirs_owned
-            .iter()
-            .any(|allowed_dir| canonical_path.starts_with(allowed_dir))
-    })
-    .await
-    .unwrap_or(false)
-}
 
 /// Resolve and canonicalize directory paths
 ///
@@ -209,7 +76,6 @@ pub async fn is_path_allowed(path: &std::path::Path, allowed_directories: &[Path
 /// * [`FileSystemMcpError::ValidationError`] - If current directory cannot be determined
 /// * [`FileSystemMcpError::DirectoryNotFound`] - If a directory does not exist
 /// * [`FileSystemMcpError::PermissionDenied`] - If a directory exists but cannot be accessed
-/// * [`FileSystemMcpError::InvalidDirectory`] - If a path exists but is not a directory
 ///
 /// # Examples
 ///
@@ -240,6 +106,9 @@ pub async fn resolve_directories(directories: Vec<PathBuf>) -> FileSystemMcpResu
         vec![
             std::env::current_dir().map_err(|_| FileSystemMcpError::ValidationError {
                 message: "Failed to get current directory".to_string(),
+                path: "".to_string(),
+                operation: "resolve_directories".to_string(),
+                data: serde_json::json!({"error": "Failed to get current directory"}),
             })?,
         ]
     } else {
@@ -269,7 +138,7 @@ pub async fn resolve_directories(directories: Vec<PathBuf>) -> FileSystemMcpResu
                 })?;
 
         if !metadata.is_dir() {
-            return Err(FileSystemMcpError::InvalidDirectory {
+            return Err(FileSystemMcpError::PermissionDenied {
                 path: canonical.display().to_string(),
             });
         }
@@ -340,96 +209,7 @@ pub async fn validate_directories(directories: &[PathBuf]) -> FileSystemMcpResul
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
     use tempfile::TempDir;
-
-    /// Test path security validation
-    #[tokio::test]
-    async fn test_path_security_validation() {
-        let temp_dir = TempDir::new().unwrap();
-        let temp_path = temp_dir.path().to_path_buf();
-
-        // Test that paths within the allowed directory are accepted
-        let allowed_file = temp_path.join("test.txt");
-        tokio::fs::write(&allowed_file, "test").await.unwrap();
-
-        // Canonicalize the temp_path first
-        let canonical_temp = temp_path.canonicalize().unwrap();
-        assert!(is_path_allowed(&allowed_file, std::slice::from_ref(&canonical_temp)).await);
-
-        // Test that paths outside the allowed directory are rejected
-        let temp_dir2 = TempDir::new().unwrap();
-        let disallowed_file = temp_dir2.path().join("test.txt");
-        tokio::fs::write(&disallowed_file, "test").await.unwrap();
-        assert!(!is_path_allowed(&disallowed_file, &[canonical_temp]).await);
-    }
-
-    /// Test is_path_allowed with various scenarios
-    #[tokio::test]
-    async fn test_is_path_allowed_comprehensive() {
-        let temp_dir = TempDir::new().unwrap();
-        let temp_path = temp_dir.path().canonicalize().unwrap();
-
-        // Test subdirectory access
-        let subdir = temp_path.join("subdir");
-        tokio::fs::create_dir(&subdir).await.unwrap();
-        let subfile = subdir.join("file.txt");
-        tokio::fs::write(&subfile, "content").await.unwrap();
-        assert!(is_path_allowed(&subfile, std::slice::from_ref(&temp_path)).await);
-
-        // Test nested subdirectory access
-        let nested_dir = subdir.join("nested");
-        tokio::fs::create_dir(&nested_dir).await.unwrap();
-        let nested_file = nested_dir.join("nested.txt");
-        tokio::fs::write(&nested_file, "nested").await.unwrap();
-        assert!(is_path_allowed(&nested_file, std::slice::from_ref(&temp_path)).await);
-
-        // Test multiple allowed directories
-        let temp_dir2 = TempDir::new().unwrap();
-        let temp_path2 = temp_dir2.path().canonicalize().unwrap();
-        let file2 = temp_path2.join("file2.txt");
-        tokio::fs::write(&file2, "content2").await.unwrap();
-        assert!(is_path_allowed(&file2, &[temp_path.clone(), temp_path2]).await);
-
-        // Test non-existent path
-        let non_existent = temp_path.join("does_not_exist.txt");
-        assert!(!is_path_allowed(&non_existent, &[temp_path]).await);
-    }
-
-    /// Test validate_path function
-    #[tokio::test]
-    async fn test_validate_path() {
-        let temp_dir = TempDir::new().unwrap();
-        let temp_path = temp_dir.path().canonicalize().unwrap();
-        let allowed_dirs = vec![temp_path.clone()];
-
-        // Test valid file path
-        let valid_file = temp_path.join("valid.txt");
-        tokio::fs::write(&valid_file, "content").await.unwrap();
-        let result = validate_path(&valid_file, &allowed_dirs).await;
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), valid_file.canonicalize().unwrap());
-
-        // Test invalid path (outside allowed directories)
-        let temp_dir2 = TempDir::new().unwrap();
-        let invalid_file = temp_dir2.path().join("invalid.txt");
-        tokio::fs::write(&invalid_file, "content").await.unwrap();
-        let result = validate_path(&invalid_file, &allowed_dirs).await;
-        assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            FileSystemMcpError::PermissionDenied { .. }
-        ));
-
-        // Test non-existent path
-        let non_existent = temp_path.join("does_not_exist.txt");
-        let result = validate_path(&non_existent, &allowed_dirs).await;
-        assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            FileSystemMcpError::DirectoryNotFound { .. }
-        ));
-    }
 
     /// Test resolve_directories function
     #[tokio::test]
@@ -476,7 +256,7 @@ mod tests {
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
-            FileSystemMcpError::InvalidDirectory { .. }
+            FileSystemMcpError::PermissionDenied { .. }
         ));
     }
 
@@ -506,49 +286,11 @@ mod tests {
     /// Test edge cases and error conditions
     #[tokio::test]
     async fn test_edge_cases() {
-        // Test is_path_allowed with empty allowed directories
-        let temp_dir = TempDir::new().unwrap();
-        let file_path = temp_dir.path().join("test.txt");
-        tokio::fs::write(&file_path, "content").await.unwrap();
-        assert!(!is_path_allowed(&file_path, &[]).await);
-
-        // Test validate_path with empty allowed directories
-        let result = validate_path(&file_path, &[]).await;
-        assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            FileSystemMcpError::PermissionDenied { .. }
-        ));
-
         // Test resolve_directories with mixed valid/invalid paths
         let temp_dir = TempDir::new().unwrap();
         let valid_path = temp_dir.path().to_path_buf();
         let invalid_path = PathBuf::from("/invalid/path");
         let result = resolve_directories(vec![valid_path, invalid_path]).await;
         assert!(result.is_err()); // Should fail on first invalid path
-    }
-
-    /// Test path traversal security
-    #[tokio::test]
-    async fn test_path_traversal_security() {
-        let temp_dir = TempDir::new().unwrap();
-        let allowed_path = temp_dir.path().canonicalize().unwrap();
-
-        // Create a subdirectory
-        let subdir = allowed_path.join("subdir");
-        tokio::fs::create_dir(&subdir).await.unwrap();
-
-        // Test that we can access files in subdirectory
-        let sub_file = subdir.join("file.txt");
-        tokio::fs::write(&sub_file, "content").await.unwrap();
-        assert!(is_path_allowed(&sub_file, std::slice::from_ref(&allowed_path)).await);
-
-        // Test that parent directory access is blocked
-        if let Some(parent) = allowed_path.parent() {
-            let parent_file = parent.join("parent_file.txt");
-            if parent_file.exists() || tokio::fs::write(&parent_file, "content").await.is_ok() {
-                assert!(!is_path_allowed(&parent_file, &[allowed_path]).await);
-            }
-        }
     }
 }
