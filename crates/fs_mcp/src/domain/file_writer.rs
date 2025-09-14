@@ -61,6 +61,21 @@ pub trait FileWriter: Send + Sync {
         sort_by: &SortBy,
     ) -> FileSystemMcpResult<WriteFileResponse>;
 
+    /// List the contents of a directory as a JSON tree
+    ///
+    /// # Arguments
+    /// * `path` - The directory path to list
+    /// * `exclude_patterns` - Patterns to exclude from the tree
+    ///
+    /// # Returns
+    /// * `Ok(ListDirectoryResponse)` - Success response with directory contents
+    /// * `Err(FileSystemMcpError)` - If the directory cannot be listed
+    async fn directory_tree(
+        &self,
+        path: &Path,
+        exclude_patterns: &[String],
+    ) -> FileSystemMcpResult<WriteFileResponse>;
+
     /// Delete a file
     ///
     /// # Arguments

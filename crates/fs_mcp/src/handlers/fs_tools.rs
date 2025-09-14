@@ -14,7 +14,7 @@ use crate::{
     domain::{FileReader, FileWriter},
     errors::{FileSystemMcpError, ToolResult},
     models::requests::{
-        CreateDirectoryRequest, EditFileRequest, ListDirectoryRequest,
+        CreateDirectoryRequest, DirectoryTreeRequest, EditFileRequest, ListDirectoryRequest,
         ListDirectoryWithSizesRequest, ReadMediaFileRequest, ReadMultipleFilesRequest,
         ReadTextFileRequest, WriteFileRequest,
     },
@@ -201,6 +201,20 @@ impl FileSystemService {
         let result = self
             .file_writer
             .list_directory_with_sizes(&valid_path, req.sort_by())
+            .await?;
+        Ok(CallToolResult::success(vec![result.into()]))
+    }
+
+    #[tool(description = "Get a recursive tree view of files and directories as JSON")]
+    async fn directory_tree(
+        &self,
+        Parameters(req): Parameters<DirectoryTreeRequest>,
+    ) -> ToolResult {
+        req.validate()?;
+        let valid_path = validate_path(req.path(), &self.allowed_directories).await?;
+        let result = self
+            .file_writer
+            .directory_tree(&valid_path, req.exclude_patterns())
             .await?;
         Ok(CallToolResult::success(vec![result.into()]))
     }

@@ -1,5 +1,6 @@
 use async_trait::async_trait;
-use std::path::Path;
+use serde::{Deserialize, Serialize};
+use std::{io, path::Path};
 use tokio::fs;
 
 use crate::{
@@ -16,6 +17,19 @@ struct DirectoryEntry {
     size: u64,
     is_directory: bool,
     modified: Option<std::time::SystemTime>,
+}
+
+/// Tree entry for directory tree representation
+#[derive(Debug, Serialize, Deserialize)]
+struct TreeEntry {
+    /// Name of the entry
+    pub name: String,
+    /// Type of the entry (file or directory)
+    #[serde(rename = "type")]
+    pub entry_type: String,
+    /// Children entries (only for directories)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub children: Option<Vec<TreeEntry>>,
 }
 
 /// Application service implementing file writing operations
@@ -219,6 +233,90 @@ impl FileWriterService {
         } else {
             format!("{:.1} {}", size, UNITS[unit_index])
         }
+    }
+
+    #[async_recursion::async_recursion]
+    async fn build_tree(
+        base_path: &Path,
+        current_path: &Path,
+        exclude_patterns: &[String],
+    ) -> Result<Vec<TreeEntry>, io::Error> {
+        let mut entries = tokio::fs::read_dir(current_path).await?;
+        let mut tree = Vec::new();
+
+        while let Some(entry) = entries.next_entry().await? {
+            let entry_path = entry.path();
+            let name = entry.file_name().to_string_lossy().to_string();
+
+            // Calculate relative path from the base directory
+            let relative_path = entry_path
+                .strip_prefix(base_path)
+                .unwrap_or(&entry_path)
+                .to_string_lossy()
+                .replace('\\', "/"); // Normalize path separators
+
+            let should_exclude = exclude_patterns.iter().any(|pattern| {
+                if let Ok(glob_pattern) = glob::Pattern::new(pattern) {
+                    // Direct match on relative path
+                    if glob_pattern.matches(&relative_path) {
+                        return true;
+                    }
+
+                    // Match on filename only
+                    if glob_pattern.matches(&name) {
+                        return true;
+                    }
+
+                    // For patterns with wildcards, try additional matching
+                    if pattern.contains('*') {
+                        // Match as subdirectory pattern
+                        if glob_pattern.matches(&format!("**/{}", relative_path)) {
+                            return true;
+                        }
+
+                        // For directory patterns like "components/*", match files inside
+                        if pattern.ends_with("/*") {
+                            let dir_pattern = &pattern[..pattern.len() - 2];
+                            if relative_path.starts_with(&format!("{}/", dir_pattern)) {
+                                return true;
+                            }
+                        }
+                    } else {
+                        // For exact patterns, try with ** prefix for nested matching
+                        if let Ok(nested_pattern) = glob::Pattern::new(&format!("**/{}", pattern))
+                            && nested_pattern.matches(&relative_path)
+                        {
+                            return true;
+                        }
+                    }
+                }
+                false
+            });
+
+            if should_exclude {
+                continue;
+            }
+
+            let metadata = entry.metadata().await?;
+            let mut tree_entry = TreeEntry {
+                name,
+                entry_type: if metadata.is_dir() {
+                    "[DIR]".to_string()
+                } else {
+                    "[FILE]".to_string()
+                },
+                children: None,
+            };
+
+            if metadata.is_dir() {
+                tree_entry.children =
+                    Some(Self::build_tree(base_path, &entry_path, exclude_patterns).await?);
+            }
+
+            tree.push(tree_entry);
+        }
+
+        Ok(tree)
     }
 }
 
@@ -566,6 +664,25 @@ impl FileWriter for FileWriterService {
             None,
             false,
         ))
+    }
+
+    async fn directory_tree(
+        &self,
+        path: &Path,
+        exclude_patterns: &[String],
+    ) -> FileSystemMcpResult<WriteFileResponse> {
+        match Self::build_tree(path, path, exclude_patterns).await {
+            Ok(tree) => Ok(WriteFileResponse::new(
+                serde_json::to_string_pretty(&tree).unwrap(),
+                path.display().to_string(),
+                None,
+                false,
+            )),
+            Err(e) => Err(FileSystemMcpError::IoError {
+                message: format!("Failed to build directory tree: {}", e),
+                path: path.display().to_string(),
+            }),
+        }
     }
 
     async fn delete_file(&self, path: &Path) -> FileSystemMcpResult<WriteFileResponse> {
@@ -1874,5 +1991,306 @@ mod tests {
         } else {
             panic!("Expected IoError");
         }
+    }
+
+    #[tokio::test]
+    async fn test_directory_tree_empty_directory() {
+        let service = FileWriterService::new();
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+
+        let result = service.directory_tree(temp_dir.path(), &[]).await;
+        assert!(result.is_ok());
+
+        let response = result.unwrap();
+        let tree: Vec<TreeEntry> = serde_json::from_str(&response.message).unwrap();
+        assert!(tree.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_directory_tree_with_files_and_directories() {
+        let service = FileWriterService::new();
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+
+        // Create test structure
+        fs::write(temp_dir.path().join("file1.txt"), "content1")
+            .await
+            .unwrap();
+        fs::write(temp_dir.path().join("file2.rs"), "content2")
+            .await
+            .unwrap();
+        fs::create_dir(temp_dir.path().join("subdir1"))
+            .await
+            .unwrap();
+        fs::create_dir(temp_dir.path().join("subdir2"))
+            .await
+            .unwrap();
+
+        // Create nested structure
+        fs::write(temp_dir.path().join("subdir1/nested_file.txt"), "nested")
+            .await
+            .unwrap();
+        fs::create_dir(temp_dir.path().join("subdir1/nested_dir"))
+            .await
+            .unwrap();
+
+        let result = service.directory_tree(temp_dir.path(), &[]).await;
+        assert!(result.is_ok());
+
+        let response = result.unwrap();
+        let tree: Vec<TreeEntry> = serde_json::from_str(&response.message).unwrap();
+
+        // Should have 4 entries at root level
+        assert_eq!(tree.len(), 4);
+
+        // Check file entries
+        let files: Vec<_> = tree.iter().filter(|e| e.entry_type == "[FILE]").collect();
+        assert_eq!(files.len(), 2);
+        assert!(files.iter().any(|f| f.name == "file1.txt"));
+        assert!(files.iter().any(|f| f.name == "file2.rs"));
+
+        // Check directory entries
+        let dirs: Vec<_> = tree.iter().filter(|e| e.entry_type == "[DIR]").collect();
+        assert_eq!(dirs.len(), 2);
+        assert!(dirs.iter().any(|d| d.name == "subdir1"));
+        assert!(dirs.iter().any(|d| d.name == "subdir2"));
+
+        // Check nested structure in subdir1
+        let subdir1 = dirs.iter().find(|d| d.name == "subdir1").unwrap();
+        assert!(subdir1.children.is_some());
+        let children = subdir1.children.as_ref().unwrap();
+        assert_eq!(children.len(), 2);
+        assert!(
+            children
+                .iter()
+                .any(|c| c.name == "nested_file.txt" && c.entry_type == "[FILE]")
+        );
+        assert!(
+            children
+                .iter()
+                .any(|c| c.name == "nested_dir" && c.entry_type == "[DIR]")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_directory_tree_with_exclude_patterns() {
+        let service = FileWriterService::new();
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+
+        // Create test structure
+        fs::write(temp_dir.path().join("file1.txt"), "content1")
+            .await
+            .unwrap();
+        fs::write(temp_dir.path().join("file2.rs"), "content2")
+            .await
+            .unwrap();
+        fs::write(temp_dir.path().join("temp.log"), "log content")
+            .await
+            .unwrap();
+        fs::create_dir(temp_dir.path().join("target"))
+            .await
+            .unwrap();
+        fs::create_dir(temp_dir.path().join("src")).await.unwrap();
+
+        // Test excluding by extension
+        let exclude_patterns = vec!["*.log".to_string(), "target".to_string()];
+        let result = service
+            .directory_tree(temp_dir.path(), &exclude_patterns)
+            .await;
+        assert!(result.is_ok());
+
+        let response = result.unwrap();
+        let tree: Vec<TreeEntry> = serde_json::from_str(&response.message).unwrap();
+
+        // Should exclude temp.log and target directory
+        assert_eq!(tree.len(), 3); // file1.txt, file2.rs, src
+        assert!(tree.iter().any(|e| e.name == "file1.txt"));
+        assert!(tree.iter().any(|e| e.name == "file2.rs"));
+        assert!(tree.iter().any(|e| e.name == "src"));
+        assert!(!tree.iter().any(|e| e.name == "temp.log"));
+        assert!(!tree.iter().any(|e| e.name == "target"));
+    }
+
+    #[tokio::test]
+    async fn test_directory_tree_with_wildcard_patterns() {
+        let service = FileWriterService::new();
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+
+        // Create test structure
+        fs::write(temp_dir.path().join("test1.txt"), "content1")
+            .await
+            .unwrap();
+        fs::write(temp_dir.path().join("test2.txt"), "content2")
+            .await
+            .unwrap();
+        fs::write(temp_dir.path().join("readme.md"), "readme")
+            .await
+            .unwrap();
+        fs::write(temp_dir.path().join("config.json"), "config")
+            .await
+            .unwrap();
+
+        // Test excluding all .txt files
+        let exclude_patterns = vec!["*.txt".to_string()];
+        let result = service
+            .directory_tree(temp_dir.path(), &exclude_patterns)
+            .await;
+        assert!(result.is_ok());
+
+        let response = result.unwrap();
+        let tree: Vec<TreeEntry> = serde_json::from_str(&response.message).unwrap();
+
+        // Should only have readme.md and config.json
+        assert_eq!(tree.len(), 2);
+        assert!(tree.iter().any(|e| e.name == "readme.md"));
+        assert!(tree.iter().any(|e| e.name == "config.json"));
+        assert!(!tree.iter().any(|e| e.name == "test1.txt"));
+        assert!(!tree.iter().any(|e| e.name == "test2.txt"));
+    }
+
+    #[tokio::test]
+    async fn test_directory_tree_nested_exclusion() {
+        let service = FileWriterService::new();
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+
+        // Create nested structure
+        fs::create_dir(temp_dir.path().join("src")).await.unwrap();
+        fs::create_dir(temp_dir.path().join("src/components"))
+            .await
+            .unwrap();
+        fs::write(temp_dir.path().join("src/main.rs"), "main code")
+            .await
+            .unwrap();
+        fs::write(temp_dir.path().join("src/lib.rs"), "lib code")
+            .await
+            .unwrap();
+        fs::write(temp_dir.path().join("src/components/button.rs"), "button")
+            .await
+            .unwrap();
+        fs::write(temp_dir.path().join("src/components/input.rs"), "input")
+            .await
+            .unwrap();
+
+        // Test excluding specific nested files - use more specific patterns
+        let exclude_patterns = vec!["lib.rs".to_string(), "src/components/*".to_string()];
+        let result = service
+            .directory_tree(temp_dir.path(), &exclude_patterns)
+            .await;
+        assert!(result.is_ok());
+
+        let response = result.unwrap();
+        let tree: Vec<TreeEntry> = serde_json::from_str(&response.message).unwrap();
+
+        // Should have src directory
+        assert_eq!(tree.len(), 1);
+        let src_dir = &tree[0];
+        assert_eq!(src_dir.name, "src");
+        assert_eq!(src_dir.entry_type, "[DIR]");
+
+        // src should contain main.rs and components directory (lib.rs excluded)
+        let src_children = src_dir.children.as_ref().unwrap();
+        assert_eq!(src_children.len(), 2);
+        assert!(src_children.iter().any(|c| c.name == "main.rs"));
+        assert!(src_children.iter().any(|c| c.name == "components"));
+        assert!(!src_children.iter().any(|c| c.name == "lib.rs"));
+
+        // components directory should be empty due to exclusion
+        let components_dir = src_children
+            .iter()
+            .find(|c| c.name == "components")
+            .unwrap();
+        let components_children = components_dir.children.as_ref().unwrap();
+        assert!(components_children.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_directory_tree_nonexistent_path() {
+        let service = FileWriterService::new();
+        let nonexistent_path = Path::new("/nonexistent/path/that/does/not/exist");
+
+        let result = service.directory_tree(nonexistent_path, &[]).await;
+        assert!(result.is_err());
+
+        if let Err(FileSystemMcpError::IoError { message, path }) = result {
+            assert!(message.contains("Failed to build directory tree"));
+            assert_eq!(path, nonexistent_path.display().to_string());
+        } else {
+            panic!("Expected IoError for nonexistent path");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_directory_tree_json_format() {
+        let service = FileWriterService::new();
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+
+        // Create simple structure
+        fs::write(temp_dir.path().join("test.txt"), "content")
+            .await
+            .unwrap();
+        fs::create_dir(temp_dir.path().join("folder"))
+            .await
+            .unwrap();
+
+        let result = service.directory_tree(temp_dir.path(), &[]).await;
+        assert!(result.is_ok());
+
+        let response = result.unwrap();
+
+        // Verify it's valid JSON
+        let parsed: serde_json::Value = serde_json::from_str(&response.message).unwrap();
+        assert!(parsed.is_array());
+
+        // Verify structure
+        let tree: Vec<TreeEntry> = serde_json::from_str(&response.message).unwrap();
+        assert_eq!(tree.len(), 2);
+
+        // Check JSON contains expected fields
+        assert!(response.message.contains("\"name\""));
+        assert!(response.message.contains("\"type\""));
+        assert!(response.message.contains("\"children\""));
+        assert!(response.message.contains("[FILE]"));
+        assert!(response.message.contains("[DIR]"));
+    }
+
+    #[tokio::test]
+    async fn test_directory_tree_deep_nesting() {
+        let service = FileWriterService::new();
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+
+        // Create deep nested structure
+        let deep_path = temp_dir.path().join("level1/level2/level3");
+        fs::create_dir_all(&deep_path).await.unwrap();
+        fs::write(deep_path.join("deep_file.txt"), "deep content")
+            .await
+            .unwrap();
+
+        let result = service.directory_tree(temp_dir.path(), &[]).await;
+        assert!(result.is_ok());
+
+        let response = result.unwrap();
+        let tree: Vec<TreeEntry> = serde_json::from_str(&response.message).unwrap();
+
+        // Navigate through the nested structure
+        assert_eq!(tree.len(), 1);
+        let level1 = &tree[0];
+        assert_eq!(level1.name, "level1");
+        assert_eq!(level1.entry_type, "[DIR]");
+
+        let level1_children = level1.children.as_ref().unwrap();
+        assert_eq!(level1_children.len(), 1);
+        let level2 = &level1_children[0];
+        assert_eq!(level2.name, "level2");
+
+        let level2_children = level2.children.as_ref().unwrap();
+        assert_eq!(level2_children.len(), 1);
+        let level3 = &level2_children[0];
+        assert_eq!(level3.name, "level3");
+
+        let level3_children = level3.children.as_ref().unwrap();
+        assert_eq!(level3_children.len(), 1);
+        let deep_file = &level3_children[0];
+        assert_eq!(deep_file.name, "deep_file.txt");
+        assert_eq!(deep_file.entry_type, "[FILE]");
+        assert!(deep_file.children.is_none());
     }
 }

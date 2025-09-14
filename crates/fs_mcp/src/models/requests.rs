@@ -317,3 +317,30 @@ impl Validate for ListDirectoryWithSizesRequest {
         Ok(())
     }
 }
+
+/// Request to get directory tree
+#[derive(Debug, Deserialize, schemars::JsonSchema, Getters)]
+pub struct DirectoryTreeRequest {
+    /// Path to the directory
+    path: String,
+    /// Patterns to exclude from the tree
+    #[serde(default)]
+    exclude_patterns: Vec<String>,
+}
+
+impl Validate for DirectoryTreeRequest {
+    fn validate(&self) -> FileSystemMcpResult<()> {
+        if self.path.trim().is_empty() {
+            return Err(FileSystemMcpError::ValidationError {
+                message: "Invalid path".to_string(),
+                path: self.path.clone(),
+                operation: "directory_tree".to_string(),
+                data: serde_json::json!({
+                    "error": "Path cannot be empty",
+                    "provided_path": self.path
+                }),
+            });
+        }
+        Ok(())
+    }
+}
