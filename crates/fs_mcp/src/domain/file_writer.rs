@@ -1,7 +1,10 @@
 use async_trait::async_trait;
 use std::path::Path;
 
-use crate::{errors::FileSystemMcpResult, models::responses::WriteFileResponse};
+use crate::{
+    errors::FileSystemMcpResult,
+    models::{requests::SortBy, responses::WriteFileResponse},
+};
 
 /// Domain trait for file writing operations
 ///
@@ -43,6 +46,20 @@ pub trait FileWriter: Send + Sync {
     /// * `Ok(ListDirectoryResponse)` - Success response with directory contents
     /// * `Err(FileSystemMcpError)` - If the directory cannot be listed
     async fn list_directory(&self, path: &Path) -> FileSystemMcpResult<WriteFileResponse>;
+
+    /// List the contents of a directory with sizes
+    ///
+    /// # Arguments
+    /// * `path` - The directory path to list
+    ///
+    /// # Returns
+    /// * `Ok(ListDirectoryResponse)` - Success response with directory contents
+    /// * `Err(FileSystemMcpError)` - If the directory cannot be listed
+    async fn list_directory_with_sizes(
+        &self,
+        path: &Path,
+        sort_by: &SortBy,
+    ) -> FileSystemMcpResult<WriteFileResponse>;
 
     /// Delete a file
     ///

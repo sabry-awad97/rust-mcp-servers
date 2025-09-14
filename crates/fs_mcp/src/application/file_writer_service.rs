@@ -5,8 +5,18 @@ use tokio::fs;
 use crate::{
     domain::FileWriter,
     errors::{FileSystemMcpError, FileSystemMcpResult},
-    models::responses::WriteFileResponse,
+    models::{requests::SortBy, responses::WriteFileResponse},
 };
+
+/// Reusable directory entry information
+#[derive(Debug, Clone)]
+struct DirectoryEntry {
+    name: String,
+    file_type: String,
+    size: u64,
+    is_directory: bool,
+    modified: Option<std::time::SystemTime>,
+}
 
 /// Application service implementing file writing operations
 ///
@@ -44,6 +54,171 @@ impl FileWriterService {
     /// Normalize line endings to Unix format (\n)
     fn normalize_line_endings(text: &str) -> String {
         text.replace("\r\n", "\n")
+    }
+
+    /// Efficiently read and collect directory entries with metadata
+    async fn read_directory_entries(path: &Path) -> FileSystemMcpResult<Vec<DirectoryEntry>> {
+        let mut entries = fs::read_dir(path)
+            .await
+            .map_err(|e| FileSystemMcpError::IoError {
+                message: format!("Failed to list directory: {}", e),
+                path: path.display().to_string(),
+            })?;
+
+        let mut directory_entries = Vec::new();
+
+        while let Some(entry) =
+            entries
+                .next_entry()
+                .await
+                .map_err(|e| FileSystemMcpError::IoError {
+                    message: format!("Failed to read directory entry: {}", e),
+                    path: path.display().to_string(),
+                })?
+        {
+            let metadata = entry
+                .metadata()
+                .await
+                .map_err(|e| FileSystemMcpError::IoError {
+                    message: format!("Failed to get metadata: {}", e),
+                    path: path.display().to_string(),
+                })?;
+
+            let name = entry.file_name().to_string_lossy().to_string();
+            let is_directory = metadata.is_dir();
+            let size = if is_directory { 0 } else { metadata.len() };
+            let modified = metadata.modified().ok();
+
+            let file_type = if is_directory {
+                "[DIR]".to_string()
+            } else if metadata.is_symlink() {
+                "[SYMLINK]".to_string()
+            } else {
+                // Extract file extension for better type identification
+                match std::path::Path::new(&name).extension() {
+                    Some(ext) => format!("{} [FILE]", ext.to_string_lossy().to_lowercase()),
+                    None => "[FILE]".to_string(),
+                }
+            };
+
+            directory_entries.push(DirectoryEntry {
+                name,
+                file_type,
+                size,
+                is_directory,
+                modified,
+            });
+        }
+
+        Ok(directory_entries)
+    }
+
+    /// Sort directory entries based on the specified criteria
+    fn sort_directory_entries(entries: &mut [DirectoryEntry], sort_by: &SortBy) {
+        match sort_by {
+            SortBy::Name => entries.sort_by(|a, b| a.name.cmp(&b.name)),
+            SortBy::Size => entries.sort_by(|a, b| b.size.cmp(&a.size)),
+            SortBy::Modified => entries.sort_by(|a, b| {
+                match (a.modified, b.modified) {
+                    (Some(a_time), Some(b_time)) => b_time.cmp(&a_time),
+                    (Some(_), None) => std::cmp::Ordering::Less,
+                    (None, Some(_)) => std::cmp::Ordering::Greater,
+                    (None, None) => a.name.cmp(&b.name), // Fallback to name
+                }
+            }),
+        }
+    }
+
+    /// Get appropriate icon for file type
+    fn get_file_icon(file_type: &str) -> &'static str {
+        match file_type {
+            "[DIR]" => "📁",
+            "[SYMLINK]" => "🔗",
+            t if t.contains("rs [FILE]") => "🦀",
+            t if t.contains("js [FILE]") => "📜",
+            t if t.contains("ts [FILE]") => "📘",
+            t if t.contains("py [FILE]") => "🐍",
+            t if t.contains("json [FILE]") => "📋",
+            t if t.contains("toml [FILE]") => "⚙️",
+            t if t.contains("yaml [FILE]") || t.contains("yml [FILE]") => "📄",
+            t if t.contains("md [FILE]") => "📝",
+            t if t.contains("txt [FILE]") => "📄",
+            t if t.contains("log [FILE]") => "📊",
+            t if t.contains("png [FILE]")
+                || t.contains("jpg [FILE]")
+                || t.contains("jpeg [FILE]")
+                || t.contains("gif [FILE]") =>
+            {
+                "🖼️"
+            }
+            t if t.contains("pdf [FILE]") => "📕",
+            t if t.contains("zip [FILE]")
+                || t.contains("tar [FILE]")
+                || t.contains("gz [FILE]") =>
+            {
+                "📦"
+            }
+            _ => "📄",
+        }
+    }
+
+    /// Format detailed directory listing with statistics
+    fn format_detailed_listing(entries: &[DirectoryEntry]) -> (Vec<String>, String) {
+        let mut output = Vec::new();
+        let mut total_files = 0;
+        let mut total_dirs = 0;
+        let mut total_size = 0;
+
+        // Group by type for better organization
+        let (directories, files): (Vec<_>, Vec<_>) =
+            entries.iter().partition(|entry| entry.is_directory);
+
+        if !directories.is_empty() {
+            output.push("📂 Directories:".to_string());
+            for dir in &directories {
+                output.push(format!("  📁 {}/", dir.name));
+                total_dirs += 1;
+            }
+            output.push(String::new());
+        }
+
+        if !files.is_empty() {
+            output.push("📄 Files:".to_string());
+            for file in &files {
+                let icon = Self::get_file_icon(&file.file_type);
+                let size_str = Self::format_size(file.size);
+                output.push(format!("  {} {} ({:>8})", icon, file.name, size_str));
+                total_files += 1;
+                total_size += file.size;
+            }
+        }
+
+        let stats = format!(
+            "📊 Summary: {} directories, {} files | Total size: {}",
+            total_dirs,
+            total_files,
+            Self::format_size(total_size)
+        );
+
+        (output, stats)
+    }
+
+    /// Format file size in human readable format
+    fn format_size(size: u64) -> String {
+        const UNITS: &[&str] = &["B", "KB", "MB", "GB", "TB"];
+        let mut size = size as f64;
+        let mut unit_index = 0;
+
+        while size >= 1024.0 && unit_index < UNITS.len() - 1 {
+            size /= 1024.0;
+            unit_index += 1;
+        }
+
+        if unit_index == 0 {
+            format!("{} {}", size as u64, UNITS[unit_index])
+        } else {
+            format!("{:.1} {}", size, UNITS[unit_index])
+        }
     }
 }
 
@@ -313,57 +488,80 @@ impl FileWriter for FileWriterService {
     }
 
     async fn list_directory(&self, path: &Path) -> FileSystemMcpResult<WriteFileResponse> {
-        let mut entries = fs::read_dir(path)
-            .await
-            .map_err(|e| FileSystemMcpError::IoError {
-                message: format!("Failed to list directory: {}", e),
-                path: path.display().to_string(),
-            })?;
+        let mut entries = Self::read_directory_entries(path).await?;
+        Self::sort_directory_entries(&mut entries, &SortBy::Name);
 
-        let mut results = Vec::new();
-        while let Some(entry) =
-            entries
-                .next_entry()
-                .await
-                .map_err(|e| FileSystemMcpError::IoError {
-                    message: format!("Failed to read directory entry: {}", e),
-                    path: path.display().to_string(),
-                })?
-        {
-            let metadata = entry
-                .metadata()
-                .await
-                .map_err(|e| FileSystemMcpError::IoError {
-                    message: format!("Failed to get metadata: {}", e),
-                    path: path.display().to_string(),
-                })?;
-            let name = entry.file_name().to_string_lossy().to_string();
-            let file_type = if metadata.is_dir() {
-                "directory".to_string()
-            } else if metadata.is_symlink() {
-                "symlink".to_string()
-            } else {
-                // Extract file extension for better type identification
-                match std::path::Path::new(&name).extension() {
-                    Some(ext) => format!("{} file", ext.to_string_lossy().to_lowercase()),
-                    None => "file".to_string(),
-                }
-            };
-            let size = if metadata.is_file() {
-                format!(" ({} bytes)", metadata.len())
-            } else {
-                String::new()
-            };
-            results.push(format!("{} - {}{}", name, file_type, size));
+        let (directories, files): (Vec<_>, Vec<_>) =
+            entries.iter().partition(|entry| entry.is_directory);
+
+        let mut output = Vec::new();
+        output.push(format!("📁 Directory: {}", path.display()));
+        output.push(String::new());
+
+        if !directories.is_empty() {
+            output.push("📂 Directories:".to_string());
+            for dir in &directories {
+                output.push(format!("  📁 {}/", dir.name));
+            }
+            output.push(String::new());
         }
 
-        results.sort();
+        if !files.is_empty() {
+            output.push("📄 Files:".to_string());
+            for file in &files {
+                let icon = Self::get_file_icon(&file.file_type);
+                let size_info = if file.size > 0 {
+                    format!(" ({})", Self::format_size(file.size))
+                } else {
+                    String::new()
+                };
+                output.push(format!("  {} {}{}", icon, file.name, size_info));
+            }
+            output.push(String::new());
+        }
+
+        output.push(format!(
+            "📊 Summary: {} directories, {} files",
+            directories.len(),
+            files.len()
+        ));
 
         Ok(WriteFileResponse::new(
-            format!(
-                "Directory listing completed successfully:\n{}",
-                results.join("\n")
-            ),
+            output.join("\n"),
+            path.display().to_string(),
+            None,
+            false,
+        ))
+    }
+
+    async fn list_directory_with_sizes(
+        &self,
+        path: &Path,
+        sort_by: &SortBy,
+    ) -> FileSystemMcpResult<WriteFileResponse> {
+        let mut entries = Self::read_directory_entries(path).await?;
+        Self::sort_directory_entries(&mut entries, sort_by);
+
+        let mut output = Vec::new();
+        output.push(format!(
+            "📁 Directory: {} (sorted by {:?})",
+            path.display(),
+            sort_by
+        ));
+        output.push(String::new());
+
+        let (content, stats) = Self::format_detailed_listing(&entries);
+        output.extend(content);
+
+        if !entries.is_empty() {
+            output.push(String::new());
+            output.push(stats);
+        } else {
+            output.push("📂 Empty directory".to_string());
+        }
+
+        Ok(WriteFileResponse::new(
+            output.join("\n"),
             path.display().to_string(),
             None,
             false,
@@ -567,14 +765,12 @@ mod tests {
         assert!(result.is_ok());
 
         let response = result.unwrap();
+        assert!(response.message.contains("📁 Directory:"));
         assert!(
             response
                 .message
-                .contains("Directory listing completed successfully")
+                .contains("📊 Summary: 0 directories, 0 files")
         );
-        // Empty directory should have minimal content
-        let lines: Vec<&str> = response.message.lines().collect();
-        assert_eq!(lines.len(), 1); // Just the header line
     }
 
     #[tokio::test]
@@ -599,20 +795,21 @@ mod tests {
         assert!(result.is_ok());
 
         let response = result.unwrap();
+        assert!(response.message.contains("📁 Directory:"));
+        assert!(response.message.contains("📄 Files:"));
+
+        // Check that all files are listed with emojis
+        assert!(response.message.contains("📄 test.txt"));
+        assert!(response.message.contains("⚙️ config.toml"));
+        assert!(response.message.contains("🦀 script.rs"));
+        assert!(response.message.contains("📄 no_extension"));
+
+        // Check summary
         assert!(
             response
                 .message
-                .contains("Directory listing completed successfully")
+                .contains("📊 Summary: 0 directories, 4 files")
         );
-
-        // Check that all files are listed with correct types
-        assert!(response.message.contains("test.txt - txt file"));
-        assert!(response.message.contains("config.toml - toml file"));
-        assert!(response.message.contains("script.rs - rs file"));
-        assert!(response.message.contains("no_extension - file"));
-
-        // Check that file sizes are included
-        assert!(response.message.contains("bytes"));
     }
 
     #[tokio::test]
@@ -634,16 +831,21 @@ mod tests {
         assert!(result.is_ok());
 
         let response = result.unwrap();
+        assert!(response.message.contains("📁 Directory:"));
+        assert!(response.message.contains("📂 Directories:"));
+        assert!(response.message.contains("📄 Files:"));
+
+        // Check that directories are listed correctly
+        assert!(response.message.contains("📁 subdir1/"));
+        assert!(response.message.contains("📁 subdir2/"));
+        assert!(response.message.contains("📝 readme.md"));
+
+        // Check summary
         assert!(
             response
                 .message
-                .contains("Directory listing completed successfully")
+                .contains("📊 Summary: 2 directories, 1 files")
         );
-
-        // Check that directories are listed correctly
-        assert!(response.message.contains("subdir1 - directory"));
-        assert!(response.message.contains("subdir2 - directory"));
-        assert!(response.message.contains("readme.md - md file"));
 
         // Directories should not have size information
         assert!(!response.message.contains("subdir1 - directory ("));
@@ -720,18 +922,263 @@ mod tests {
         let content = response.message;
 
         // Verify all items are present with correct types
-        assert!(content.contains("docs - directory"));
-        assert!(content.contains("src - directory"));
-        assert!(content.contains("Cargo.toml - toml file"));
-        assert!(content.contains("README.md - md file"));
-        assert!(content.contains("main.rs - rs file"));
-        assert!(content.contains("data.json - json file"));
+        assert!(content.contains("📁 docs/"));
+        assert!(content.contains("📁 src/"));
+        assert!(content.contains("⚙️ Cargo.toml"));
+        assert!(content.contains("📝 README.md"));
+        assert!(content.contains("🦀 main.rs"));
+        assert!(content.contains("📋 data.json"));
 
-        // Verify sorting (directories and files mixed but alphabetically sorted)
-        let lines: Vec<&str> = content.lines().skip(1).collect(); // Skip header
-        let mut sorted_lines = lines.clone();
-        sorted_lines.sort();
-        assert_eq!(lines, sorted_lines);
+        // Check sections are present
+        assert!(content.contains("📂 Directories:"));
+        assert!(content.contains("📄 Files:"));
+        assert!(content.contains("📊 Summary: 2 directories, 4 files"));
+    }
+
+    #[tokio::test]
+    async fn test_list_directory_with_sizes_empty() {
+        let service = FileWriterService::new();
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+
+        let result = service
+            .list_directory_with_sizes(temp_dir.path(), &SortBy::Name)
+            .await;
+        assert!(result.is_ok());
+
+        let response = result.unwrap();
+        assert!(response.message.contains("📁 Directory:"));
+        assert!(response.message.contains("📂 Empty directory"));
+    }
+
+    #[tokio::test]
+    async fn test_list_directory_with_sizes_mixed_content() {
+        let service = FileWriterService::new();
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+
+        // Create test files with different sizes
+        fs::write(temp_dir.path().join("small.txt"), "Hi")
+            .await
+            .unwrap();
+        fs::write(temp_dir.path().join("large.txt"), "A".repeat(1024))
+            .await
+            .unwrap();
+        fs::create_dir(temp_dir.path().join("subdir"))
+            .await
+            .unwrap();
+
+        let result = service
+            .list_directory_with_sizes(temp_dir.path(), &SortBy::Name)
+            .await;
+        assert!(result.is_ok());
+
+        let response = result.unwrap();
+
+        // Check file entries with sizes
+        assert!(response.message.contains("📄 large.txt"));
+        assert!(response.message.contains("📄 small.txt"));
+        assert!(response.message.contains("📁 subdir/"));
+
+        // Check statistics
+        assert!(
+            response
+                .message
+                .contains("📊 Summary: 1 directories, 2 files")
+        );
+        assert!(response.message.contains("Total size:"));
+    }
+
+    #[tokio::test]
+    async fn test_list_directory_with_sizes_sort_by_size() {
+        let service = FileWriterService::new();
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+
+        // Create files with different sizes
+        fs::write(temp_dir.path().join("tiny.txt"), "x")
+            .await
+            .unwrap(); // 1 byte
+        fs::write(temp_dir.path().join("huge.txt"), "X".repeat(2048))
+            .await
+            .unwrap(); // 2048 bytes
+        fs::write(temp_dir.path().join("medium.txt"), "M".repeat(512))
+            .await
+            .unwrap(); // 512 bytes
+
+        let result = service
+            .list_directory_with_sizes(temp_dir.path(), &SortBy::Size)
+            .await;
+        assert!(result.is_ok());
+
+        let response = result.unwrap();
+        let lines: Vec<&str> = response.message.lines().collect();
+
+        // Find file positions (should be sorted by size, largest first)
+        let huge_pos = lines
+            .iter()
+            .position(|line| line.contains("huge.txt"))
+            .unwrap();
+        let medium_pos = lines
+            .iter()
+            .position(|line| line.contains("medium.txt"))
+            .unwrap();
+        let tiny_pos = lines
+            .iter()
+            .position(|line| line.contains("tiny.txt"))
+            .unwrap();
+
+        assert!(huge_pos < medium_pos);
+        assert!(medium_pos < tiny_pos);
+    }
+
+    #[tokio::test]
+    async fn test_list_directory_with_sizes_sort_by_name() {
+        let service = FileWriterService::new();
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+
+        // Create files in non-alphabetical order
+        fs::write(temp_dir.path().join("zebra.txt"), "content")
+            .await
+            .unwrap();
+        fs::write(temp_dir.path().join("alpha.txt"), "content")
+            .await
+            .unwrap();
+        fs::write(temp_dir.path().join("beta.txt"), "content")
+            .await
+            .unwrap();
+
+        let result = service
+            .list_directory_with_sizes(temp_dir.path(), &SortBy::Name)
+            .await;
+        assert!(result.is_ok());
+
+        let response = result.unwrap();
+        let lines: Vec<&str> = response.message.lines().collect();
+
+        // Find file positions (should be sorted alphabetically)
+        let alpha_pos = lines
+            .iter()
+            .position(|line| line.contains("alpha.txt"))
+            .unwrap();
+        let beta_pos = lines
+            .iter()
+            .position(|line| line.contains("beta.txt"))
+            .unwrap();
+        let zebra_pos = lines
+            .iter()
+            .position(|line| line.contains("zebra.txt"))
+            .unwrap();
+
+        assert!(alpha_pos < beta_pos);
+        assert!(beta_pos < zebra_pos);
+    }
+
+    #[tokio::test]
+    async fn test_list_directory_with_sizes_human_readable_sizes() {
+        let service = FileWriterService::new();
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+
+        // Create files with specific sizes to test formatting
+        fs::write(temp_dir.path().join("bytes.txt"), "A".repeat(500))
+            .await
+            .unwrap(); // 500 B
+        fs::write(temp_dir.path().join("kilobytes.txt"), "B".repeat(1536))
+            .await
+            .unwrap(); // 1.5 KB
+        fs::write(temp_dir.path().join("megabytes.txt"), "C".repeat(1_572_864))
+            .await
+            .unwrap(); // 1.5 MB
+
+        let result = service
+            .list_directory_with_sizes(temp_dir.path(), &SortBy::Size)
+            .await;
+        assert!(result.is_ok());
+
+        let response = result.unwrap();
+
+        // Check human-readable size formatting
+        assert!(response.message.contains("1.5 MB"));
+        assert!(response.message.contains("1.5 KB"));
+        assert!(response.message.contains("500 B"));
+    }
+
+    #[tokio::test]
+    async fn test_list_directory_with_sizes_directories_no_size() {
+        let service = FileWriterService::new();
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+
+        // Create directories and files
+        fs::create_dir(temp_dir.path().join("dir1")).await.unwrap();
+        fs::create_dir(temp_dir.path().join("dir2")).await.unwrap();
+        fs::write(temp_dir.path().join("file.txt"), "content")
+            .await
+            .unwrap();
+
+        let result = service
+            .list_directory_with_sizes(temp_dir.path(), &SortBy::Name)
+            .await;
+        assert!(result.is_ok());
+
+        let response = result.unwrap();
+
+        // Directories should not have size information displayed
+        let lines: Vec<&str> = response.message.lines().collect();
+        let dir_lines: Vec<&str> = lines
+            .iter()
+            .filter(|line| line.contains("[DIR]"))
+            .cloned()
+            .collect();
+
+        for dir_line in dir_lines {
+            // Directory lines should end with just the name, no size
+            assert!(!dir_line.contains("B"));
+            assert!(!dir_line.contains("KB"));
+            assert!(!dir_line.contains("MB"));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_list_directory_with_sizes_statistics_accuracy() {
+        let service = FileWriterService::new();
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+
+        // Create known content
+        fs::write(temp_dir.path().join("file1.txt"), "A".repeat(100))
+            .await
+            .unwrap(); // 100 bytes
+        fs::write(temp_dir.path().join("file2.txt"), "B".repeat(200))
+            .await
+            .unwrap(); // 200 bytes
+        fs::create_dir(temp_dir.path().join("dir1")).await.unwrap();
+        fs::create_dir(temp_dir.path().join("dir2")).await.unwrap();
+
+        let result = service
+            .list_directory_with_sizes(temp_dir.path(), &SortBy::Name)
+            .await;
+        assert!(result.is_ok());
+
+        let response = result.unwrap();
+
+        // Verify exact statistics
+        assert!(
+            response
+                .message
+                .contains("📊 Summary: 2 directories, 2 files")
+        );
+        assert!(response.message.contains("Total size: 300 B"));
+    }
+
+    #[tokio::test]
+    async fn test_list_directory_with_sizes_nonexistent_path() {
+        let service = FileWriterService::new();
+        let nonexistent_path = std::path::Path::new("/nonexistent/directory");
+
+        let result = service
+            .list_directory_with_sizes(nonexistent_path, &SortBy::Name)
+            .await;
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            FileSystemMcpError::IoError { .. }
+        ));
     }
 
     #[tokio::test]

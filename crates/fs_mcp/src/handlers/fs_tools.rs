@@ -14,8 +14,9 @@ use crate::{
     domain::{FileReader, FileWriter},
     errors::{FileSystemMcpError, ToolResult},
     models::requests::{
-        CreateDirectoryRequest, EditFileRequest, ListDirectoryRequest, ReadMediaFileRequest,
-        ReadMultipleFilesRequest, ReadTextFileRequest, WriteFileRequest,
+        CreateDirectoryRequest, EditFileRequest, ListDirectoryRequest,
+        ListDirectoryWithSizesRequest, ReadMediaFileRequest, ReadMultipleFilesRequest,
+        ReadTextFileRequest, WriteFileRequest,
     },
     service::validation::{Validate, validate_path},
 };
@@ -187,6 +188,20 @@ impl FileSystemService {
         req.validate()?;
         let valid_path = validate_path(req.path(), &self.allowed_directories).await?;
         let result = self.file_writer.list_directory(&valid_path).await?;
+        Ok(CallToolResult::success(vec![result.into()]))
+    }
+
+    #[tool(description = "Get a detailed listing with file sizes")]
+    async fn list_directory_with_sizes(
+        &self,
+        Parameters(req): Parameters<ListDirectoryWithSizesRequest>,
+    ) -> ToolResult {
+        req.validate()?;
+        let valid_path = validate_path(req.path(), &self.allowed_directories).await?;
+        let result = self
+            .file_writer
+            .list_directory_with_sizes(&valid_path, req.sort_by())
+            .await?;
         Ok(CallToolResult::success(vec![result.into()]))
     }
 }

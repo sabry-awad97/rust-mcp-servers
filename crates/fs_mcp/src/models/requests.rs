@@ -277,3 +277,43 @@ impl Validate for ListDirectoryRequest {
         Ok(())
     }
 }
+
+/// Sort options for directory listings
+#[derive(Debug, Deserialize, schemars::JsonSchema, Clone, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum SortBy {
+    /// Sort by name (alphabetical)
+    #[default]
+    Name,
+    /// Sort by file size (largest first)
+    Size,
+    /// Sort by modification time (newest first)
+    Modified,
+}
+
+/// Request to list directory contents with sizes
+#[derive(Debug, Deserialize, schemars::JsonSchema, Getters)]
+pub struct ListDirectoryWithSizesRequest {
+    /// Path to the directory to list
+    path: String,
+    /// Sort entries by name or size
+    #[serde(rename = "sortBy", default)]
+    sort_by: SortBy,
+}
+
+impl Validate for ListDirectoryWithSizesRequest {
+    fn validate(&self) -> FileSystemMcpResult<()> {
+        if self.path.trim().is_empty() {
+            return Err(FileSystemMcpError::ValidationError {
+                message: "Invalid path".to_string(),
+                path: self.path.clone(),
+                operation: "list_directory_with_sizes".to_string(),
+                data: serde_json::json!({
+                    "error": "Path cannot be empty",
+                    "provided_path": self.path
+                }),
+            });
+        }
+        Ok(())
+    }
+}
