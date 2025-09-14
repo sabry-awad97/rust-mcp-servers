@@ -24,7 +24,7 @@ base64 = { workspace = true }
 derive-getters = { workspace = true }
 dirs = { workspace = true }
 futures = { workspace = true }
-glob = { workspace = true }
+globset = { workspace = true }
 mime_guess = { workspace = true }
 rmcp = { workspace = true, features = ["transport-io", "server", "schemars"] }
 serde = { workspace = true, features = ["derive"] }

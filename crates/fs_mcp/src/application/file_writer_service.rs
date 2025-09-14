@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use globset::{Glob, GlobSetBuilder};
 use serde::{Deserialize, Serialize};
 use std::{io, path::Path};
 use tokio::fs;
@@ -255,43 +256,35 @@ impl FileWriterService {
                 .to_string_lossy()
                 .replace('\\', "/"); // Normalize path separators
 
-            let should_exclude = exclude_patterns.iter().any(|pattern| {
-                if let Ok(glob_pattern) = glob::Pattern::new(pattern) {
-                    // Direct match on relative path
-                    if glob_pattern.matches(&relative_path) {
-                        return true;
-                    }
-
-                    // Match on filename only
-                    if glob_pattern.matches(&name) {
-                        return true;
-                    }
-
-                    // For patterns with wildcards, try additional matching
-                    if pattern.contains('*') {
-                        // Match as subdirectory pattern
-                        if glob_pattern.matches(&format!("**/{}", relative_path)) {
-                            return true;
-                        }
-
-                        // For directory patterns like "components/*", match files inside
-                        if pattern.ends_with("/*") {
-                            let dir_pattern = &pattern[..pattern.len() - 2];
-                            if relative_path.starts_with(&format!("{}/", dir_pattern)) {
-                                return true;
-                            }
-                        }
-                    } else {
-                        // For exact patterns, try with ** prefix for nested matching
-                        if let Ok(nested_pattern) = glob::Pattern::new(&format!("**/{}", pattern))
-                            && nested_pattern.matches(&relative_path)
-                        {
-                            return true;
-                        }
-                    }
-                }
+            // Build globset for pattern matching
+            let should_exclude = if exclude_patterns.is_empty() {
                 false
-            });
+            } else {
+                let mut builder = GlobSetBuilder::new();
+
+                // Add all patterns to the builder
+                for pattern in exclude_patterns {
+                    if let Ok(glob) = Glob::new(pattern) {
+                        builder.add(glob);
+                    }
+
+                    // Also add patterns with ** prefix for nested matching
+                    if !pattern.starts_with("**/")
+                        && let Ok(nested_glob) = Glob::new(&format!("**/{}", pattern))
+                    {
+                        builder.add(nested_glob);
+                    }
+
+                    // For directory patterns like "components/*", don't match the directory itself
+                    // We only want to exclude the contents, not the directory
+                }
+
+                if let Ok(globset) = builder.build() {
+                    globset.is_match(&relative_path) || globset.is_match(&name)
+                } else {
+                    false
+                }
+            };
 
             if should_exclude {
                 continue;
