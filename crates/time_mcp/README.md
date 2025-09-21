@@ -17,6 +17,7 @@ A comprehensive **Model Context Protocol (MCP) server** that provides timezone-a
 - 🧹 **Input Sanitization** - Automatically trims whitespace from inputs
 - 📚 **Rich Documentation** - Built-in help and timezone references
 - 🚀 **Interactive Prompts** - Guided timezone conversion with completion
+- 🔧 **Optional Logging** - Configurable logging via LOG_LEVEL environment variable
 
 ## 🚀 Installation & Usage
 
@@ -48,7 +49,11 @@ Add to your Claude Desktop MCP configuration:
 {
   "mcpServers": {
     "time": {
-      "command": "mcp-server-time"
+      "command": "mcp-server-time",
+      "args": [],
+      "env": {
+        "LOG_LEVEL": "debug"
+      }
     }
   }
 }
@@ -199,6 +204,25 @@ The server dynamically supports **all 400+ IANA timezone names** from `chrono-tz
 - `GMT` - Greenwich Mean Time
 
 ## 🔧 Configuration
+
+### Environment Variables
+
+**NEW in v0.3.0**: Optional logging configuration
+
+- `LOG_LEVEL` (optional): Set logging level (debug, info, warn, error). If not set, logging is disabled for better performance.
+
+```bash
+# Run without logging (default)
+mcp-server-time
+
+# Run with debug logging
+LOG_LEVEL=debug mcp-server-time
+
+# Run with info logging
+LOG_LEVEL=info mcp-server-time
+```
+
+### Timezone Detection
 
 The server automatically detects your local timezone. You can override this by setting environment variables or using the builder pattern (if implemented).
 
