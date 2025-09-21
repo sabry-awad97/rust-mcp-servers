@@ -10,7 +10,7 @@ homepage = "https://github.com/sabry-awad97/rust-mcp-servers"
 repository = "https://github.com/sabry-awad97/rust-mcp-servers"
 license = "MIT"
 keywords = ["mcp", "filesystem", "server", "protocol"]
-categories = ["date-and-time", "web-programming", "command-line-utilities"]
+categories = ["file-system", "web-programming", "command-line-utilities"]
 exclude = ["target/", "*.log", ".env"]
 
 [[bin]]

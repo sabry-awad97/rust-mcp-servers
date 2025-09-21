@@ -15,13 +15,13 @@ use utils::logging;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Parse CLI arguments
-    let cli = Cli::parse_config().await?;
+    let config = Cli::parse_config().await?;
 
     // Initialize logging based on environment
     logging::init_logging()?;
 
     // Run the MCP server
-    if let Err(e) = run(cli).await {
+    if let Err(e) = run(config).await {
         tracing::error!("Failed to run MCP server: {}", e);
         return Err(e);
     }
