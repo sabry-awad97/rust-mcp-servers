@@ -87,23 +87,6 @@ npx @modelcontextprotocol/inspector mcp-server-time
 npx @modelcontextprotocol/inspector mcp-server-filesystem --allowed-dir /path/to/test
 ```
 
-### Direct Integration
-
-```rust
-use mcp_server_time::TimeService;
-use rmcp::{ServiceExt, transport::stdio};
-
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let service = TimeService::new()
-        .serve(stdio())
-        .await?;
-
-    service.waiting().await?;
-    Ok(())
-}
-```
-
 ## 🏗️ Architecture
 
 This workspace follows a modular architecture with shared dependencies and consistent patterns:
