@@ -1,0 +1,50 @@
+[package]
+name = "mcp-server-fetch"
+version = "0.1.0"
+edition = "2024"
+authors = ["Sabry Awad <dr.sabry1997@gmail.com>"]
+description = "A powerful Model Context Protocol (MCP) server for web content fetching and HTTP operations"
+documentation = "https://docs.rs/mcp-server-fetch"
+readme = "README.md"
+homepage = "https://github.com/sabry-awad97/rust-mcp-servers"
+repository = "https://github.com/sabry-awad97/rust-mcp-servers"
+license = "MIT"
+keywords = ["mcp", "fetch", "http", "web", "server", "protocol"]
+categories = [
+    "web-programming",
+    "network-programming",
+    "command-line-utilities",
+]
+exclude = ["target/", "*.log", ".env"]
+
+[[bin]]
+name = "mcp-server-fetch"
+path = "src/main.rs"
+
+[dependencies]
+async-trait = { workspace = true }
+base64 = { workspace = true }
+derive-getters = { workspace = true }
+futures = { workspace = true }
+reqwest = { workspace = true, features = ["json"] }
+rmcp = { workspace = true, features = ["transport-io", "server", "schemars"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = [
+    "env-filter",
+    "fmt",
+    "json",
+] }
+clap = { workspace = true, features = ["derive"] }
+url = { workspace = true }
+mime = { workspace = true }
+bytes = { workspace = true }
+
+[dev-dependencies]
+assert_cmd = { workspace = true }
+tempfile = { workspace = true }
+predicates = { workspace = true }
+tokio-test = { workspace = true }
