@@ -1,7 +1,11 @@
+use async_recursion::async_recursion;
 use async_trait::async_trait;
 use globset::{Glob, GlobSetBuilder};
 use serde::{Deserialize, Serialize};
-use std::{io, path::Path};
+use std::{
+    io,
+    path::{Path, PathBuf},
+};
 use tokio::fs;
 
 use crate::{
@@ -310,6 +314,66 @@ impl FileWriterService {
         }
 
         Ok(tree)
+    }
+
+    #[async_recursion]
+    async fn search_recursive(
+        root_path: &Path,
+        current_path: &Path,
+        search_glob: &Glob,
+        exclude_globset: &Option<globset::GlobSet>,
+        results: &mut Vec<String>,
+    ) -> FileSystemMcpResult<()> {
+        let mut entries =
+            fs::read_dir(current_path)
+                .await
+                .map_err(|e| FileSystemMcpError::IoError {
+                    message: format!("Failed to read directory: {}", e),
+                    path: current_path.display().to_string(),
+                })?;
+
+        while let Some(entry) =
+            entries
+                .next_entry()
+                .await
+                .map_err(|e| FileSystemMcpError::IoError {
+                    message: format!("Failed to read directory entry: {}", e),
+                    path: current_path.display().to_string(),
+                })?
+        {
+            let entry_path = entry.path();
+            let relative_path = entry_path
+                .strip_prefix(root_path)
+                .unwrap_or(&entry_path)
+                .to_string_lossy()
+                .replace('\\', "/");
+
+            // Check exclude patterns
+            if let Some(globset) = exclude_globset
+                && globset.is_match(&relative_path)
+            {
+                continue;
+            }
+
+            // Check if matches search pattern
+            if search_glob.compile_matcher().is_match(&relative_path) {
+                results.push(entry_path.display().to_string());
+            }
+
+            // Recurse into directories
+            if entry.metadata().await.map(|m| m.is_dir()).unwrap_or(false) {
+                Self::search_recursive(
+                    root_path,
+                    &entry_path,
+                    search_glob,
+                    exclude_globset,
+                    results,
+                )
+                .await?;
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -735,6 +799,53 @@ impl FileWriter for FileWriterService {
             })?;
 
         Ok(WriteFileResponse::moved(from, to))
+    }
+
+    async fn search_files(
+        &self,
+        path: &Path,
+        pattern: &str,
+        _allowed_directories: &[PathBuf],
+        exclude_patterns: &[String],
+    ) -> FileSystemMcpResult<WriteFileResponse> {
+        let mut results = Vec::new();
+
+        // Build globset for pattern matching
+        let search_glob = Glob::new(pattern).map_err(|e| FileSystemMcpError::ValidationError {
+            message: format!("Invalid search pattern: {}", e),
+            path: path.display().to_string(),
+            operation: "search_files".to_string(),
+            data: serde_json::json!({
+                "error": "Invalid glob pattern",
+                "pattern": pattern
+            }),
+        })?;
+
+        let mut exclude_globset = None;
+        if !exclude_patterns.is_empty() {
+            let mut builder = GlobSetBuilder::new();
+            for exclude_pattern in exclude_patterns {
+                if let Ok(glob) = Glob::new(exclude_pattern) {
+                    builder.add(glob);
+                }
+            }
+            exclude_globset = builder.build().ok();
+        }
+
+        Self::search_recursive(path, path, &search_glob, &exclude_globset, &mut results).await?;
+
+        let results_json =
+            serde_json::to_string_pretty(&results).map_err(|e| FileSystemMcpError::IoError {
+                message: format!("Failed to serialize search results: {}", e),
+                path: path.display().to_string(),
+            })?;
+
+        Ok(WriteFileResponse::new(
+            results_json,
+            path.display().to_string(),
+            None,
+            false,
+        ))
     }
 
     async fn copy_file(&self, from: &Path, to: &Path) -> FileSystemMcpResult<WriteFileResponse> {
@@ -2285,5 +2396,258 @@ mod tests {
         assert_eq!(deep_file.name, "deep_file.txt");
         assert_eq!(deep_file.entry_type, "[FILE]");
         assert!(deep_file.children.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_search_files_basic_pattern() {
+        let service = FileWriterService::new();
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+
+        // Create test files
+        fs::write(temp_dir.path().join("test1.txt"), "content1")
+            .await
+            .unwrap();
+        fs::write(temp_dir.path().join("test2.rs"), "content2")
+            .await
+            .unwrap();
+        fs::write(temp_dir.path().join("readme.md"), "readme")
+            .await
+            .unwrap();
+
+        let result = service
+            .search_files(temp_dir.path(), "*.txt", &[], &[])
+            .await;
+        assert!(result.is_ok());
+
+        let response = result.unwrap();
+        let results: Vec<String> = serde_json::from_str(&response.message).unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert!(results[0].ends_with("test1.txt"));
+    }
+
+    #[tokio::test]
+    async fn test_search_files_recursive() {
+        let service = FileWriterService::new();
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+
+        // Create nested structure
+        fs::create_dir(temp_dir.path().join("src")).await.unwrap();
+        fs::create_dir(temp_dir.path().join("src/components"))
+            .await
+            .unwrap();
+
+        fs::write(temp_dir.path().join("main.rs"), "main code")
+            .await
+            .unwrap();
+        fs::write(temp_dir.path().join("src/lib.rs"), "lib code")
+            .await
+            .unwrap();
+        fs::write(temp_dir.path().join("src/components/button.rs"), "button")
+            .await
+            .unwrap();
+
+        let result = service
+            .search_files(temp_dir.path(), "*.rs", &[], &[])
+            .await;
+        assert!(result.is_ok());
+
+        let response = result.unwrap();
+        let results: Vec<String> = serde_json::from_str(&response.message).unwrap();
+
+        assert_eq!(results.len(), 3);
+        assert!(results.iter().any(|r| r.ends_with("main.rs")));
+        assert!(results.iter().any(|r| r.ends_with("lib.rs")));
+        assert!(results.iter().any(|r| r.ends_with("button.rs")));
+    }
+
+    #[tokio::test]
+    async fn test_search_files_with_exclude_patterns() {
+        let service = FileWriterService::new();
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+
+        // Create test files
+        fs::write(temp_dir.path().join("main.rs"), "main code")
+            .await
+            .unwrap();
+        fs::write(temp_dir.path().join("lib.rs"), "lib code")
+            .await
+            .unwrap();
+        fs::write(temp_dir.path().join("test.rs"), "test code")
+            .await
+            .unwrap();
+
+        let exclude_patterns = vec!["**/lib.rs".to_string()];
+        let result = service
+            .search_files(temp_dir.path(), "*.rs", &[], &exclude_patterns)
+            .await;
+        assert!(result.is_ok());
+
+        let response = result.unwrap();
+        let results: Vec<String> = serde_json::from_str(&response.message).unwrap();
+
+        assert_eq!(results.len(), 2);
+        assert!(results.iter().any(|r| r.ends_with("main.rs")));
+        assert!(results.iter().any(|r| r.ends_with("test.rs")));
+        assert!(!results.iter().any(|r| r.ends_with("lib.rs")));
+    }
+
+    #[tokio::test]
+    async fn test_search_files_wildcard_patterns() {
+        let service = FileWriterService::new();
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+
+        // Create nested structure
+        fs::create_dir(temp_dir.path().join("src")).await.unwrap();
+        fs::create_dir(temp_dir.path().join("tests")).await.unwrap();
+
+        fs::write(temp_dir.path().join("src/main.rs"), "main")
+            .await
+            .unwrap();
+        fs::write(temp_dir.path().join("tests/integration.rs"), "test")
+            .await
+            .unwrap();
+        fs::write(temp_dir.path().join("readme.txt"), "readme")
+            .await
+            .unwrap();
+
+        let result = service
+            .search_files(temp_dir.path(), "**/main.rs", &[], &[])
+            .await;
+        assert!(result.is_ok());
+
+        let response = result.unwrap();
+        let results: Vec<String> = serde_json::from_str(&response.message).unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert!(results[0].ends_with("main.rs"));
+    }
+
+    #[tokio::test]
+    async fn test_search_files_no_matches() {
+        let service = FileWriterService::new();
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+
+        // Create test files that won't match
+        fs::write(temp_dir.path().join("test.txt"), "content")
+            .await
+            .unwrap();
+        fs::write(temp_dir.path().join("readme.md"), "readme")
+            .await
+            .unwrap();
+
+        let result = service
+            .search_files(temp_dir.path(), "*.rs", &[], &[])
+            .await;
+        assert!(result.is_ok());
+
+        let response = result.unwrap();
+        let results: Vec<String> = serde_json::from_str(&response.message).unwrap();
+
+        assert!(results.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_search_files_invalid_pattern() {
+        let service = FileWriterService::new();
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+
+        let result = service
+            .search_files(temp_dir.path(), "[invalid", &[], &[])
+            .await;
+        assert!(result.is_err());
+
+        if let Err(FileSystemMcpError::ValidationError {
+            message, operation, ..
+        }) = result
+        {
+            assert!(message.contains("Invalid search pattern"));
+            assert_eq!(operation, "search_files");
+        } else {
+            panic!("Expected ValidationError for invalid pattern");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_search_files_nonexistent_directory() {
+        let service = FileWriterService::new();
+        let nonexistent_path = Path::new("/nonexistent/path");
+
+        let result = service
+            .search_files(nonexistent_path, "*.txt", &[], &[])
+            .await;
+        assert!(result.is_err());
+
+        if let Err(FileSystemMcpError::IoError { message, .. }) = result {
+            assert!(message.contains("Failed to read directory"));
+        } else {
+            panic!("Expected IoError for nonexistent directory");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_search_files_complex_exclude_patterns() {
+        let service = FileWriterService::new();
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+
+        // Create complex nested structure
+        fs::create_dir_all(temp_dir.path().join("src/components"))
+            .await
+            .unwrap();
+        fs::create_dir_all(temp_dir.path().join("target/debug"))
+            .await
+            .unwrap();
+        fs::create_dir(temp_dir.path().join("tests")).await.unwrap();
+
+        fs::write(temp_dir.path().join("src/main.rs"), "main")
+            .await
+            .unwrap();
+        fs::write(temp_dir.path().join("src/components/button.rs"), "button")
+            .await
+            .unwrap();
+        fs::write(temp_dir.path().join("target/debug/app.exe"), "binary")
+            .await
+            .unwrap();
+        fs::write(temp_dir.path().join("tests/integration.rs"), "test")
+            .await
+            .unwrap();
+
+        let exclude_patterns = vec!["target/**".to_string(), "**/components/*".to_string()];
+        let result = service
+            .search_files(temp_dir.path(), "**/*", &[], &exclude_patterns)
+            .await;
+        assert!(result.is_ok());
+
+        let response = result.unwrap();
+        let results: Vec<String> = serde_json::from_str(&response.message).unwrap();
+
+        // Should find main.rs and integration.rs, but not button.rs or app.exe
+        assert!(results.iter().any(|r| r.ends_with("main.rs")));
+        assert!(results.iter().any(|r| r.ends_with("integration.rs")));
+        assert!(!results.iter().any(|r| r.ends_with("button.rs")));
+        assert!(!results.iter().any(|r| r.ends_with("app.exe")));
+    }
+
+    #[tokio::test]
+    async fn test_search_files_directory_matching() {
+        let service = FileWriterService::new();
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+
+        // Create directories and files
+        fs::create_dir(temp_dir.path().join("src")).await.unwrap();
+        fs::create_dir(temp_dir.path().join("tests")).await.unwrap();
+        fs::write(temp_dir.path().join("readme.txt"), "readme")
+            .await
+            .unwrap();
+
+        // Search for directories
+        let result = service.search_files(temp_dir.path(), "src", &[], &[]).await;
+        assert!(result.is_ok());
+
+        let response = result.unwrap();
+        let results: Vec<String> = serde_json::from_str(&response.message).unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert!(results[0].ends_with("src"));
     }
 }

@@ -16,7 +16,7 @@ use crate::{
     models::requests::{
         CreateDirectoryRequest, DirectoryTreeRequest, EditFileRequest, ListDirectoryRequest,
         ListDirectoryWithSizesRequest, MoveFileRequest, ReadMediaFileRequest,
-        ReadMultipleFilesRequest, ReadTextFileRequest, WriteFileRequest,
+        ReadMultipleFilesRequest, ReadTextFileRequest, SearchFilesRequest, WriteFileRequest,
     },
     service::validation::{Validate, validate_path},
 };
@@ -225,6 +225,22 @@ impl FileSystemService {
         let valid_from = validate_path(req.source(), &self.allowed_directories).await?;
         let valid_to = validate_path(req.destination(), &self.allowed_directories).await?;
         let result = self.file_writer.move_file(&valid_from, &valid_to).await?;
+        Ok(CallToolResult::success(vec![result.into()]))
+    }
+
+    #[tool(description = "Search for files and directories matching a pattern")]
+    async fn search_files(&self, Parameters(req): Parameters<SearchFilesRequest>) -> ToolResult {
+        req.validate()?;
+        let valid_path = validate_path(req.path(), &self.allowed_directories).await?;
+        let result = self
+            .file_writer
+            .search_files(
+                &valid_path,
+                req.pattern(),
+                &self.allowed_directories,
+                req.exclude_patterns(),
+            )
+            .await?;
         Ok(CallToolResult::success(vec![result.into()]))
     }
 }

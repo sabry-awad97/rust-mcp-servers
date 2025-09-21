@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::{
     errors::FileSystemMcpResult,
@@ -106,6 +106,25 @@ pub trait FileWriter: Send + Sync {
     /// * `Ok(WriteFileResponse)` - Success response
     /// * `Err(FileSystemMcpError)` - If the move operation fails
     async fn move_file(&self, from: &Path, to: &Path) -> FileSystemMcpResult<WriteFileResponse>;
+
+    /// Search for files and directories matching a pattern
+    ///
+    /// # Arguments
+    /// * `path` - The directory path to search
+    /// * `pattern` - The pattern to search for
+    /// * `allowed_directories` - List of allowed directories
+    /// * `exclude_patterns` - Patterns to exclude from the search
+    ///
+    /// # Returns
+    /// * `Ok(ListDirectoryResponse)` - Success response with directory contents
+    /// * `Err(FileSystemMcpError)` - If the directory cannot be listed
+    async fn search_files(
+        &self,
+        path: &Path,
+        pattern: &str,
+        allowed_directories: &[PathBuf],
+        exclude_patterns: &[String],
+    ) -> FileSystemMcpResult<WriteFileResponse>;
 
     /// Copy a file to a new location
     ///

@@ -396,3 +396,45 @@ impl Validate for MoveFileRequest {
         Ok(())
     }
 }
+
+/// Request to search for files
+#[derive(Debug, Deserialize, schemars::JsonSchema, Getters)]
+pub struct SearchFilesRequest {
+    /// Base path to search from
+    path: String,
+    /// Glob pattern to match
+    pattern: String,
+    /// Patterns to exclude from results
+    #[serde(default)]
+    exclude_patterns: Vec<String>,
+}
+
+impl Validate for SearchFilesRequest {
+    fn validate(&self) -> FileSystemMcpResult<()> {
+        if self.path.trim().is_empty() {
+            return Err(FileSystemMcpError::ValidationError {
+                message: "Invalid path".to_string(),
+                path: self.path.clone(),
+                operation: "search_files".to_string(),
+                data: serde_json::json!({
+                    "error": "Path cannot be empty",
+                    "provided_path": self.path
+                }),
+            });
+        }
+
+        if self.pattern.trim().is_empty() {
+            return Err(FileSystemMcpError::ValidationError {
+                message: "Invalid pattern".to_string(),
+                path: self.path.clone(),
+                operation: "search_files".to_string(),
+                data: serde_json::json!({
+                    "error": "Search pattern cannot be empty",
+                    "provided_pattern": self.pattern
+                }),
+            });
+        }
+
+        Ok(())
+    }
+}
