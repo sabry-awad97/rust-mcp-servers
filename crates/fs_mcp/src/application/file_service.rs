@@ -3,15 +3,22 @@ use async_trait::async_trait;
 use globset::{Glob, GlobSetBuilder};
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::VecDeque,
     io,
     path::{Path, PathBuf},
 };
-use tokio::fs;
+use tokio::{
+    fs::{self, File},
+    io::{AsyncBufReadExt, AsyncReadExt, BufReader},
+};
 
 use crate::{
-    domain::FileWriter,
+    domain::FileOperations,
     errors::{FileSystemMcpError, FileSystemMcpResult},
-    models::{requests::SortBy, responses::WriteFileResponse},
+    models::{
+        requests::SortBy,
+        responses::{ReadFileResponse, WriteFileResponse},
+    },
 };
 
 /// Reusable directory entry information
@@ -37,16 +44,53 @@ struct TreeEntry {
     pub children: Option<Vec<TreeEntry>>,
 }
 
-/// Application service implementing file writing operations
+/// Application service implementing file operations
 ///
-/// This service provides concrete implementations for all file writing operations
+/// This service provides concrete implementations for all file operations
 /// following SOLID principles and Domain-Driven Design patterns.
-pub struct FileWriterService;
+pub struct FileService;
 
-impl FileWriterService {
-    /// Create a new FileWriterService instance
+impl FileService {
+    /// Create a new FileService instance
     pub fn new() -> Self {
         Self
+    }
+
+    /// Reusable function to read file content as bytes using Node.js-style streaming
+    ///
+    /// This private method provides the core streaming functionality that can be
+    /// reused by both text and media file reading operations.
+    async fn read_file_bytes(&self, path: &Path) -> FileSystemMcpResult<Vec<u8>> {
+        let file = File::open(path)
+            .await
+            .map_err(|_| FileSystemMcpError::PermissionDenied {
+                path: path.display().to_string(),
+            })?;
+
+        // Use buffered reader for streaming chunks like Node.js
+        let mut reader = BufReader::new(file);
+        let mut contents = Vec::new();
+
+        // Stream file in chunks
+        const CHUNK_SIZE: usize = 8192; // 8KB chunks like Node.js default
+        let mut buffer = vec![0u8; CHUNK_SIZE];
+
+        loop {
+            let bytes_read = reader.read(&mut buffer).await.map_err(|_| {
+                FileSystemMcpError::PermissionDenied {
+                    path: path.display().to_string(),
+                }
+            })?;
+
+            if bytes_read == 0 {
+                break; // End of file reached
+            }
+
+            // Append chunk to contents
+            contents.extend_from_slice(&buffer[..bytes_read]);
+        }
+
+        Ok(contents)
     }
 
     /// Helper method to get file metadata
@@ -377,14 +421,122 @@ impl FileWriterService {
     }
 }
 
-impl Default for FileWriterService {
+impl Default for FileService {
     fn default() -> Self {
         Self::new()
     }
 }
 
 #[async_trait]
-impl FileWriter for FileWriterService {
+impl FileOperations for FileService {
+    /// Read the entire contents of a file using reusable streaming function
+    async fn read_entire_file(&self, path: &Path) -> FileSystemMcpResult<ReadFileResponse> {
+        let bytes = self.read_file_bytes(path).await?;
+        let contents = String::from_utf8_lossy(&bytes).to_string();
+        Ok(ReadFileResponse::text(contents))
+    }
+
+    /// Read the first N lines using streaming with early termination
+    async fn read_file_head(
+        &self,
+        path: &Path,
+        lines: usize,
+    ) -> FileSystemMcpResult<ReadFileResponse> {
+        if lines == 0 {
+            return Ok(ReadFileResponse::text(String::new()));
+        }
+
+        let file = File::open(path)
+            .await
+            .map_err(|_| FileSystemMcpError::PermissionDenied {
+                path: path.display().to_string(),
+            })?;
+
+        let reader = BufReader::new(file);
+        let mut lines_stream = reader.lines();
+        let mut result_lines = Vec::with_capacity(lines);
+
+        // Read only the requested number of lines
+        for _ in 0..lines {
+            match lines_stream.next_line().await {
+                Ok(Some(line)) => result_lines.push(line),
+                Ok(None) => break, // End of file reached
+                Err(_) => {
+                    return Err(FileSystemMcpError::PermissionDenied {
+                        path: path.display().to_string(),
+                    });
+                }
+            }
+        }
+
+        Ok(ReadFileResponse::text(result_lines.join("\n")))
+    }
+
+    /// Read the last N lines using memory-efficient circular buffer
+    async fn read_file_tail(
+        &self,
+        path: &Path,
+        lines: usize,
+    ) -> FileSystemMcpResult<ReadFileResponse> {
+        if lines == 0 {
+            return Ok(ReadFileResponse::text(String::new()));
+        }
+
+        let file = File::open(path)
+            .await
+            .map_err(|_| FileSystemMcpError::PermissionDenied {
+                path: path.display().to_string(),
+            })?;
+
+        let reader = BufReader::new(file);
+        let mut lines_stream = reader.lines();
+        let mut circular_buffer: VecDeque<String> = VecDeque::with_capacity(lines);
+
+        // Read all lines and maintain a circular buffer of the last N lines
+        while let Some(line) =
+            lines_stream
+                .next_line()
+                .await
+                .map_err(|_| FileSystemMcpError::PermissionDenied {
+                    path: path.display().to_string(),
+                })?
+        {
+            if circular_buffer.len() == lines {
+                circular_buffer.pop_front();
+            }
+            circular_buffer.push_back(line);
+        }
+
+        // Join the lines in the circular buffer
+        Ok(ReadFileResponse::text(
+            circular_buffer
+                .into_iter()
+                .collect::<Vec<String>>()
+                .join("\n"),
+        ))
+    }
+
+    /// Read a media file and return base64-encoded content with MIME type
+    async fn read_media_file(&self, path: &Path) -> FileSystemMcpResult<ReadFileResponse> {
+        let bytes = self.read_file_bytes(path).await?;
+        Ok(ReadFileResponse::new(bytes, path))
+    }
+
+    /// Read files concurrently using futures::join_all for scalability with many files
+    async fn read_files(
+        &self,
+        paths: &[std::path::PathBuf],
+    ) -> Vec<Result<crate::models::responses::ReadFileResponse, FileSystemMcpError>> {
+        use futures::future::join_all;
+
+        let futures: Vec<_> = paths
+            .iter()
+            .map(|path| self.read_entire_file(path))
+            .collect();
+
+        join_all(futures).await
+    }
+
     async fn write_file(
         &self,
         path: &Path,
@@ -889,6 +1041,274 @@ mod tests {
     use std::{io::Write, sync::Arc};
     use tempfile::{NamedTempFile, TempDir};
 
+    async fn create_test_file(content: &str) -> NamedTempFile {
+        let mut temp_file = NamedTempFile::new().expect("Failed to create temp file");
+        temp_file
+            .write_all(content.as_bytes())
+            .expect("Failed to write test content");
+        temp_file
+    }
+
+    #[tokio::test]
+    async fn test_read_entire_file() {
+        let service = FileService::new();
+        let temp_file = create_test_file("line1\nline2\nline3").await;
+
+        let result = service.read_entire_file(temp_file.path()).await;
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        if let crate::models::responses::FileContent::Text(content) = response.content {
+            assert_eq!(content, "line1\nline2\nline3");
+        } else {
+            panic!("Expected text content");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_read_file_head() {
+        let service = FileService::new();
+        let temp_file = create_test_file("line1\nline2\nline3\nline4\nline5").await;
+
+        let result = service.read_file_head(temp_file.path(), 3).await;
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        if let crate::models::responses::FileContent::Text(content) = response.content {
+            assert_eq!(content, "line1\nline2\nline3");
+        } else {
+            panic!("Expected text content");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_read_file_head_zero_lines() {
+        let service = FileService::new();
+        let temp_file = create_test_file("line1\nline2\nline3").await;
+
+        let result = service.read_file_head(temp_file.path(), 0).await;
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        if let crate::models::responses::FileContent::Text(content) = response.content {
+            assert_eq!(content, "");
+        } else {
+            panic!("Expected text content");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_read_file_tail() {
+        let service = FileService::new();
+        let temp_file = create_test_file("line1\nline2\nline3\nline4\nline5").await;
+
+        let result = service.read_file_tail(temp_file.path(), 3).await;
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        if let crate::models::responses::FileContent::Text(content) = response.content {
+            assert_eq!(content, "line3\nline4\nline5");
+        } else {
+            panic!("Expected text content");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_read_file_tail_zero_lines() {
+        let service = FileService::new();
+        let temp_file = create_test_file("line1\nline2\nline3").await;
+
+        let result = service.read_file_tail(temp_file.path(), 0).await;
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        if let crate::models::responses::FileContent::Text(content) = response.content {
+            assert_eq!(content, "");
+        } else {
+            panic!("Expected text content");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_read_nonexistent_file() {
+        let service = FileService::new();
+        let nonexistent_path = Path::new("/nonexistent/file.txt");
+
+        let result = service.read_entire_file(nonexistent_path).await;
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            FileSystemMcpError::PermissionDenied { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_read_files_success() {
+        let service = FileService::new();
+
+        // Create multiple test files
+        let temp_file1 = create_test_file("content of file 1").await;
+        let temp_file2 = create_test_file("content of file 2").await;
+        let temp_file3 = create_test_file("content of file 3").await;
+
+        let paths = vec![
+            temp_file1.path().to_path_buf(),
+            temp_file2.path().to_path_buf(),
+            temp_file3.path().to_path_buf(),
+        ];
+
+        let results = service.read_files(&paths).await;
+
+        // All files should be read successfully
+        assert_eq!(results.len(), 3);
+        assert!(results[0].is_ok());
+        assert!(results[1].is_ok());
+        assert!(results[2].is_ok());
+
+        // Verify content
+        if let Ok(response) = &results[0] {
+            if let crate::models::responses::FileContent::Text(content) = &response.content {
+                assert_eq!(content, "content of file 1");
+            } else {
+                panic!("Expected text content");
+            }
+        }
+
+        if let Ok(response) = &results[1] {
+            if let crate::models::responses::FileContent::Text(content) = &response.content {
+                assert_eq!(content, "content of file 2");
+            } else {
+                panic!("Expected text content");
+            }
+        }
+
+        if let Ok(response) = &results[2] {
+            if let crate::models::responses::FileContent::Text(content) = &response.content {
+                assert_eq!(content, "content of file 3");
+            } else {
+                panic!("Expected text content");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_read_files_empty_list() {
+        let service = FileService::new();
+        let paths: Vec<std::path::PathBuf> = vec![];
+
+        let results = service.read_files(&paths).await;
+
+        assert_eq!(results.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_read_files_mixed_success_and_failure() {
+        let service = FileService::new();
+
+        // Create one valid file and one invalid path
+        let temp_file = create_test_file("valid content").await;
+        let nonexistent_path = std::path::PathBuf::from("/nonexistent/file.txt");
+
+        let paths = vec![temp_file.path().to_path_buf(), nonexistent_path];
+
+        let results = service.read_files(&paths).await;
+
+        // Should have results for both attempts
+        assert_eq!(results.len(), 2);
+
+        // First file should succeed
+        assert!(results[0].is_ok());
+        if let Ok(response) = &results[0] {
+            if let crate::models::responses::FileContent::Text(content) = &response.content {
+                assert_eq!(content, "valid content");
+            } else {
+                panic!("Expected text content");
+            }
+        }
+
+        // Second file should fail
+        assert!(results[1].is_err());
+        assert!(matches!(
+            results[1].as_ref().unwrap_err(),
+            FileSystemMcpError::PermissionDenied { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_read_files_all_failures() {
+        let service = FileService::new();
+
+        let paths = vec![
+            std::path::PathBuf::from("/nonexistent/file1.txt"),
+            std::path::PathBuf::from("/nonexistent/file2.txt"),
+            std::path::PathBuf::from("/nonexistent/file3.txt"),
+        ];
+
+        let results = service.read_files(&paths).await;
+
+        // All should fail
+        assert_eq!(results.len(), 3);
+        assert!(results[0].is_err());
+        assert!(results[1].is_err());
+        assert!(results[2].is_err());
+
+        // Verify error types
+        for result in &results {
+            assert!(matches!(
+                result.as_ref().unwrap_err(),
+                FileSystemMcpError::PermissionDenied { .. }
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_read_files_single_file() {
+        let service = FileService::new();
+        let temp_file = create_test_file("single file content").await;
+
+        let paths = vec![temp_file.path().to_path_buf()];
+
+        let results = service.read_files(&paths).await;
+
+        assert_eq!(results.len(), 1);
+        assert!(results[0].is_ok());
+
+        if let Ok(response) = &results[0] {
+            if let crate::models::responses::FileContent::Text(content) = &response.content {
+                assert_eq!(content, "single file content");
+            } else {
+                panic!("Expected text content");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_read_files_large_batch() {
+        let service = FileService::new();
+
+        // Create 10 test files to test concurrent processing
+        let mut temp_files = Vec::new();
+        let mut paths = Vec::new();
+
+        for i in 0..10 {
+            let temp_file = create_test_file(&format!("content of file {}", i)).await;
+            paths.push(temp_file.path().to_path_buf());
+            temp_files.push(temp_file); // Keep files alive
+        }
+
+        let results = service.read_files(&paths).await;
+
+        // All files should be read successfully
+        assert_eq!(results.len(), 10);
+
+        for (i, result) in results.iter().enumerate() {
+            assert!(result.is_ok(), "File {} should be read successfully", i);
+
+            if let Ok(response) = result {
+                if let crate::models::responses::FileContent::Text(content) = &response.content {
+                    assert_eq!(content, &format!("content of file {}", i));
+                } else {
+                    panic!("Expected text content for file {}", i);
+                }
+            }
+        }
+    }
+
     async fn create_temp_file_with_content(content: &str) -> NamedTempFile {
         let mut temp_file = NamedTempFile::new().expect("Failed to create temp file");
         temp_file
@@ -899,7 +1319,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_write_file_new() {
-        let service = FileWriterService::new();
+        let service = FileService::new();
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let file_path = temp_dir.path().join("test_file.txt");
         let content = "Hello, World!";
@@ -918,7 +1338,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_write_file_overwrite() {
-        let service = FileWriterService::new();
+        let service = FileService::new();
         let temp_file = create_temp_file_with_content("original content").await;
         let new_content = "new content";
 
@@ -936,7 +1356,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_directory() {
-        let service = FileWriterService::new();
+        let service = FileService::new();
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let new_dir = temp_dir.path().join("new_directory");
 
@@ -953,7 +1373,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_directory_empty() {
-        let service = FileWriterService::new();
+        let service = FileService::new();
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
 
         let result = service.list_directory(temp_dir.path()).await;
@@ -970,7 +1390,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_directory_with_files() {
-        let service = FileWriterService::new();
+        let service = FileService::new();
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
 
         // Create test files with different extensions
@@ -1009,7 +1429,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_directory_with_subdirectories() {
-        let service = FileWriterService::new();
+        let service = FileService::new();
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
 
         // Create subdirectories
@@ -1049,7 +1469,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_directory_sorted_output() {
-        let service = FileWriterService::new();
+        let service = FileService::new();
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
 
         // Create files in non-alphabetical order
@@ -1077,7 +1497,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_directory_nonexistent() {
-        let service = FileWriterService::new();
+        let service = FileService::new();
         let nonexistent_path = std::path::Path::new("/nonexistent/directory");
 
         let result = service.list_directory(nonexistent_path).await;
@@ -1090,7 +1510,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_directory_mixed_content() {
-        let service = FileWriterService::new();
+        let service = FileService::new();
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
 
         // Create mixed content: files, directories, different extensions
@@ -1132,7 +1552,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_directory_with_sizes_empty() {
-        let service = FileWriterService::new();
+        let service = FileService::new();
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
 
         let result = service
@@ -1147,7 +1567,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_directory_with_sizes_mixed_content() {
-        let service = FileWriterService::new();
+        let service = FileService::new();
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
 
         // Create test files with different sizes
@@ -1184,7 +1604,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_directory_with_sizes_sort_by_size() {
-        let service = FileWriterService::new();
+        let service = FileService::new();
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
 
         // Create files with different sizes
@@ -1226,7 +1646,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_directory_with_sizes_sort_by_name() {
-        let service = FileWriterService::new();
+        let service = FileService::new();
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
 
         // Create files in non-alphabetical order
@@ -1268,7 +1688,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_directory_with_sizes_human_readable_sizes() {
-        let service = FileWriterService::new();
+        let service = FileService::new();
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
 
         // Create files with specific sizes to test formatting
@@ -1297,7 +1717,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_directory_with_sizes_directories_no_size() {
-        let service = FileWriterService::new();
+        let service = FileService::new();
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
 
         // Create directories and files
@@ -1332,7 +1752,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_directory_with_sizes_statistics_accuracy() {
-        let service = FileWriterService::new();
+        let service = FileService::new();
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
 
         // Create known content
@@ -1363,7 +1783,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_directory_with_sizes_nonexistent_path() {
-        let service = FileWriterService::new();
+        let service = FileService::new();
         let nonexistent_path = std::path::Path::new("/nonexistent/directory");
 
         let result = service
@@ -1378,7 +1798,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_move_file() {
-        let service = FileWriterService::new();
+        let service = FileService::new();
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let temp_file = create_temp_file_with_content("test content").await;
         let source_path = temp_file.path().to_path_buf();
@@ -1397,7 +1817,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_write_file_with_nested_directories() {
-        let service = FileWriterService::new();
+        let service = FileService::new();
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let nested_path = temp_dir
             .path()
@@ -1419,7 +1839,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_write_file_exclusive_creation() {
-        let service = FileWriterService::new();
+        let service = FileService::new();
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let file_path = temp_dir.path().join("exclusive_test.txt");
         let content = "exclusive creation test";
@@ -1440,7 +1860,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_write_file_atomic_rename() {
-        let service = FileWriterService::new();
+        let service = FileService::new();
         let temp_file = create_temp_file_with_content("original content").await;
         let file_path = temp_file.path();
         let new_content = "atomic rename test content";
@@ -1460,7 +1880,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_write_file_with_extension_temp_naming() {
-        let service = FileWriterService::new();
+        let service = FileService::new();
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let file_path = temp_dir.path().join("test_file.txt");
 
@@ -1506,7 +1926,7 @@ mod tests {
     async fn test_write_file_concurrent_operations() {
         use tokio::task::JoinSet;
 
-        let service = Arc::new(FileWriterService::new());
+        let service = Arc::new(FileService::new());
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
 
         // Test concurrent writes to different files
@@ -1543,7 +1963,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_write_file_large_content() {
-        let service = FileWriterService::new();
+        let service = FileService::new();
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let file_path = temp_dir.path().join("large_file.txt");
 
@@ -1565,7 +1985,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_write_file_empty_content() {
-        let service = FileWriterService::new();
+        let service = FileService::new();
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let file_path = temp_dir.path().join("empty_file.txt");
         let empty_content = "";
@@ -1585,7 +2005,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_write_file_unicode_content() {
-        let service = FileWriterService::new();
+        let service = FileService::new();
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let file_path = temp_dir.path().join("unicode_file.txt");
         let unicode_content = "Hello 世界! 🦀 Rust is awesome! ñáéíóú";
@@ -1604,7 +2024,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_write_file_permission_error_simulation() {
-        let service = FileWriterService::new();
+        let service = FileService::new();
 
         // Try to write to a path that should cause permission issues
         // Note: This test might behave differently on different platforms
@@ -1627,7 +2047,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_write_file_no_extension() {
-        let service = FileWriterService::new();
+        let service = FileService::new();
         let temp_file = create_temp_file_with_content("original").await;
 
         // Create a file path without extension
@@ -1653,7 +2073,7 @@ mod tests {
     async fn test_apply_file_edits_exact_match() {
         use crate::models::requests::EditOperation;
 
-        let service = FileWriterService::new();
+        let service = FileService::new();
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let file_path = temp_dir.path().join("test_edit.txt");
 
@@ -1676,7 +2096,7 @@ mod tests {
     async fn test_apply_file_edits_whitespace_flexible() {
         use crate::models::requests::EditOperation;
 
-        let service = FileWriterService::new();
+        let service = FileService::new();
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let file_path = temp_dir.path().join("test_whitespace.txt");
 
@@ -1702,7 +2122,7 @@ mod tests {
     async fn test_apply_file_edits_preserve_indentation() {
         use crate::models::requests::EditOperation;
 
-        let service = FileWriterService::new();
+        let service = FileService::new();
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let file_path = temp_dir.path().join("test_indent.txt");
 
@@ -1729,7 +2149,7 @@ mod tests {
     async fn test_apply_file_edits_multiple_edits() {
         use crate::models::requests::EditOperation;
 
-        let service = FileWriterService::new();
+        let service = FileService::new();
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let file_path = temp_dir.path().join("test_multiple.txt");
 
@@ -1753,7 +2173,7 @@ mod tests {
     async fn test_apply_file_edits_dry_run() {
         use crate::models::requests::EditOperation;
 
-        let service = FileWriterService::new();
+        let service = FileService::new();
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let file_path = temp_dir.path().join("test_dry_run.txt");
 
@@ -1778,7 +2198,7 @@ mod tests {
     async fn test_apply_file_edits_line_ending_normalization() {
         use crate::models::requests::EditOperation;
 
-        let service = FileWriterService::new();
+        let service = FileService::new();
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let file_path = temp_dir.path().join("test_line_endings.txt");
 
@@ -1802,7 +2222,7 @@ mod tests {
     async fn test_apply_file_edits_deletion() {
         use crate::models::requests::EditOperation;
 
-        let service = FileWriterService::new();
+        let service = FileService::new();
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let file_path = temp_dir.path().join("test_deletion.txt");
 
@@ -1825,7 +2245,7 @@ mod tests {
     async fn test_apply_file_edits_insertion() {
         use crate::models::requests::EditOperation;
 
-        let service = FileWriterService::new();
+        let service = FileService::new();
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let file_path = temp_dir.path().join("test_insertion.txt");
 
@@ -1848,7 +2268,7 @@ mod tests {
     async fn test_apply_file_edits_no_match_error() {
         use crate::models::requests::EditOperation;
 
-        let service = FileWriterService::new();
+        let service = FileService::new();
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let file_path = temp_dir.path().join("test_no_match.txt");
 
@@ -1874,7 +2294,7 @@ mod tests {
     async fn test_apply_file_edits_complex_indentation() {
         use crate::models::requests::EditOperation;
 
-        let service = FileWriterService::new();
+        let service = FileService::new();
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let file_path = temp_dir.path().join("test_complex_indent.txt");
 
@@ -1901,7 +2321,7 @@ mod tests {
     async fn test_apply_file_edits_empty_file() {
         use crate::models::requests::EditOperation;
 
-        let service = FileWriterService::new();
+        let service = FileService::new();
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let file_path = temp_dir.path().join("test_empty.txt");
 
@@ -1923,7 +2343,7 @@ mod tests {
     async fn test_apply_file_edits_unicode_content() {
         use crate::models::requests::EditOperation;
 
-        let service = FileWriterService::new();
+        let service = FileService::new();
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let file_path = temp_dir.path().join("test_unicode.txt");
 
@@ -1946,7 +2366,7 @@ mod tests {
     async fn test_apply_file_edits_sequential_dependency() {
         use crate::models::requests::EditOperation;
 
-        let service = FileWriterService::new();
+        let service = FileService::new();
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let file_path = temp_dir.path().join("test_sequential.txt");
 
@@ -1977,7 +2397,7 @@ mod tests {
     async fn test_apply_file_edits_nonexistent_file() {
         use crate::models::requests::EditOperation;
 
-        let service = FileWriterService::new();
+        let service = FileService::new();
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let file_path = temp_dir.path().join("nonexistent.txt");
 
@@ -1998,7 +2418,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_directory_tree_empty_directory() {
-        let service = FileWriterService::new();
+        let service = FileService::new();
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
 
         let result = service.directory_tree(temp_dir.path(), &[]).await;
@@ -2011,7 +2431,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_directory_tree_with_files_and_directories() {
-        let service = FileWriterService::new();
+        let service = FileService::new();
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
 
         // Create test structure
@@ -2076,7 +2496,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_directory_tree_with_exclude_patterns() {
-        let service = FileWriterService::new();
+        let service = FileService::new();
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
 
         // Create test structure
@@ -2115,7 +2535,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_directory_tree_with_wildcard_patterns() {
-        let service = FileWriterService::new();
+        let service = FileService::new();
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
 
         // Create test structure
@@ -2152,7 +2572,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_directory_tree_nested_exclusion() {
-        let service = FileWriterService::new();
+        let service = FileService::new();
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
 
         // Create nested structure
@@ -2207,7 +2627,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_directory_tree_nonexistent_path() {
-        let service = FileWriterService::new();
+        let service = FileService::new();
         let nonexistent_path = Path::new("/nonexistent/path/that/does/not/exist");
 
         let result = service.directory_tree(nonexistent_path, &[]).await;
@@ -2223,7 +2643,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_directory_tree_json_format() {
-        let service = FileWriterService::new();
+        let service = FileService::new();
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
 
         // Create simple structure
@@ -2257,7 +2677,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_directory_tree_deep_nesting() {
-        let service = FileWriterService::new();
+        let service = FileService::new();
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
 
         // Create deep nested structure
@@ -2299,7 +2719,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_search_files_basic_pattern() {
-        let service = FileWriterService::new();
+        let service = FileService::new();
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
 
         // Create test files
@@ -2327,7 +2747,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_search_files_recursive() {
-        let service = FileWriterService::new();
+        let service = FileService::new();
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
 
         // Create nested structure
@@ -2362,7 +2782,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_search_files_with_exclude_patterns() {
-        let service = FileWriterService::new();
+        let service = FileService::new();
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
 
         // Create test files
@@ -2393,7 +2813,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_search_files_wildcard_patterns() {
-        let service = FileWriterService::new();
+        let service = FileService::new();
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
 
         // Create nested structure
@@ -2424,7 +2844,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_search_files_no_matches() {
-        let service = FileWriterService::new();
+        let service = FileService::new();
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
 
         // Create test files that won't match
@@ -2448,7 +2868,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_search_files_invalid_pattern() {
-        let service = FileWriterService::new();
+        let service = FileService::new();
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
 
         let result = service
@@ -2469,7 +2889,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_search_files_nonexistent_directory() {
-        let service = FileWriterService::new();
+        let service = FileService::new();
         let nonexistent_path = Path::new("/nonexistent/path");
 
         let result = service
@@ -2486,7 +2906,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_search_files_complex_exclude_patterns() {
-        let service = FileWriterService::new();
+        let service = FileService::new();
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
 
         // Create complex nested structure
@@ -2529,7 +2949,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_search_files_directory_matching() {
-        let service = FileWriterService::new();
+        let service = FileService::new();
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
 
         // Create directories and files
@@ -2552,7 +2972,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_file_info_file() {
-        let service = FileWriterService::new();
+        let service = FileService::new();
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let file_path = temp_dir.path().join("test_file.txt");
 
@@ -2575,7 +2995,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_file_info_directory() {
-        let service = FileWriterService::new();
+        let service = FileService::new();
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let dir_path = temp_dir.path().join("test_dir");
 
@@ -2597,7 +3017,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_file_info_nonexistent() {
-        let service = FileWriterService::new();
+        let service = FileService::new();
         let nonexistent_path = Path::new("/nonexistent/file.txt");
 
         let result = service.get_file_info(nonexistent_path).await;
@@ -2612,7 +3032,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_file_info_empty_file() {
-        let service = FileWriterService::new();
+        let service = FileService::new();
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let file_path = temp_dir.path().join("empty_file.txt");
 
@@ -2633,7 +3053,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_file_info_large_file() {
-        let service = FileWriterService::new();
+        let service = FileService::new();
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let file_path = temp_dir.path().join("large_file.txt");
 

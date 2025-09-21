@@ -1,5 +1,3 @@
-pub mod file_reader;
-pub mod file_writer;
+pub mod file_operations;
 
-pub use file_reader::FileReader;
-pub use file_writer::FileWriter;
+pub use file_operations::FileOperations;

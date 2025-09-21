@@ -10,8 +10,8 @@ use rmcp::{
 };
 
 use crate::{
-    application::{FileReaderService, FileWriterService},
-    domain::{FileReader, FileWriter},
+    application::FileService,
+    domain::FileOperations,
     errors::{FileSystemMcpError, ToolResult},
     models::requests::{
         CreateDirectoryRequest, DirectoryTreeRequest, EditFileRequest, GetFileInfoRequest,
@@ -28,8 +28,7 @@ use std::sync::Arc;
 /// Uses dependency injection for file reading operations
 pub struct FileSystemService {
     allowed_directories: Vec<PathBuf>,
-    file_reader: Arc<dyn FileReader>,
-    file_writer: Arc<dyn FileWriter>,
+    file_operations: Arc<dyn FileOperations>,
     tool_router: ToolRouter<FileSystemService>,
 }
 
@@ -38,8 +37,7 @@ impl FileSystemService {
     pub fn new(allowed_directories: Vec<PathBuf>) -> Self {
         Self {
             allowed_directories,
-            file_reader: Arc::new(FileReaderService::new()),
-            file_writer: Arc::new(FileWriterService::new()),
+            file_operations: Arc::new(FileService::new()),
             tool_router: Self::tool_router(),
         }
     }
@@ -61,15 +59,19 @@ impl FileSystemService {
         let content = match (req.head(), req.tail()) {
             (Some(head_lines), None) => {
                 // Return the first N lines of the file
-                self.file_reader.read_file_head(&path, *head_lines).await?
+                self.file_operations
+                    .read_file_head(&path, *head_lines)
+                    .await?
             }
             (None, Some(tail_lines)) => {
                 // Return the last N lines of the file
-                self.file_reader.read_file_tail(&path, *tail_lines).await?
+                self.file_operations
+                    .read_file_tail(&path, *tail_lines)
+                    .await?
             }
             (None, None) => {
                 // Return the entire file
-                self.file_reader.read_entire_file(&path).await?
+                self.file_operations.read_entire_file(&path).await?
             }
             (Some(_), Some(_)) => {
                 // This should be caught by validation, but handle gracefully
@@ -96,7 +98,7 @@ impl FileSystemService {
         req.validate()?;
         let path = validate_path(req.path(), &self.allowed_directories).await?;
 
-        let content = self.file_reader.read_media_file(&path).await?;
+        let content = self.file_operations.read_media_file(&path).await?;
 
         Ok(CallToolResult::success(vec![content.into()]))
     }
@@ -118,7 +120,7 @@ impl FileSystemService {
         }
 
         // Read files concurrently
-        let results = self.file_reader.read_files(&validated_paths).await;
+        let results = self.file_operations.read_files(&validated_paths).await;
 
         // Collect successful results and handle errors
         let mut contents = Vec::new();
@@ -148,7 +150,7 @@ impl FileSystemService {
         req.validate()?;
         let valid_path = validate_path(req.path(), &self.allowed_directories).await?;
         let result = self
-            .file_writer
+            .file_operations
             .write_file(&valid_path, req.content())
             .await?;
         Ok(CallToolResult::success(vec![result.into()]))
@@ -161,7 +163,7 @@ impl FileSystemService {
         req.validate()?;
         let valid_path = validate_path(req.path(), &self.allowed_directories).await?;
         let result = self
-            .file_writer
+            .file_operations
             .apply_file_edits(&valid_path, req.edits(), req.dry_run())
             .await?;
         Ok(CallToolResult::success(vec![result.into()]))
@@ -176,7 +178,7 @@ impl FileSystemService {
     ) -> ToolResult {
         req.validate()?;
         let valid_path = validate_path(req.path(), &self.allowed_directories).await?;
-        let result = self.file_writer.create_directory(&valid_path).await?;
+        let result = self.file_operations.create_directory(&valid_path).await?;
         Ok(CallToolResult::success(vec![result.into()]))
     }
 
@@ -187,7 +189,7 @@ impl FileSystemService {
     ) -> ToolResult {
         req.validate()?;
         let valid_path = validate_path(req.path(), &self.allowed_directories).await?;
-        let result = self.file_writer.list_directory(&valid_path).await?;
+        let result = self.file_operations.list_directory(&valid_path).await?;
         Ok(CallToolResult::success(vec![result.into()]))
     }
 
@@ -199,7 +201,7 @@ impl FileSystemService {
         req.validate()?;
         let valid_path = validate_path(req.path(), &self.allowed_directories).await?;
         let result = self
-            .file_writer
+            .file_operations
             .list_directory_with_sizes(&valid_path, req.sort_by())
             .await?;
         Ok(CallToolResult::success(vec![result.into()]))
@@ -213,7 +215,7 @@ impl FileSystemService {
         req.validate()?;
         let valid_path = validate_path(req.path(), &self.allowed_directories).await?;
         let result = self
-            .file_writer
+            .file_operations
             .directory_tree(&valid_path, req.exclude_patterns())
             .await?;
         Ok(CallToolResult::success(vec![result.into()]))
@@ -224,7 +226,10 @@ impl FileSystemService {
         req.validate()?;
         let valid_from = validate_path(req.source(), &self.allowed_directories).await?;
         let valid_to = validate_path(req.destination(), &self.allowed_directories).await?;
-        let result = self.file_writer.move_file(&valid_from, &valid_to).await?;
+        let result = self
+            .file_operations
+            .move_file(&valid_from, &valid_to)
+            .await?;
         Ok(CallToolResult::success(vec![result.into()]))
     }
 
@@ -233,7 +238,7 @@ impl FileSystemService {
         req.validate()?;
         let valid_path = validate_path(req.path(), &self.allowed_directories).await?;
         let result = self
-            .file_writer
+            .file_operations
             .search_files(
                 &valid_path,
                 req.pattern(),
@@ -248,7 +253,7 @@ impl FileSystemService {
     async fn get_file_info(&self, Parameters(req): Parameters<GetFileInfoRequest>) -> ToolResult {
         req.validate()?;
         let valid_path = validate_path(req.path(), &self.allowed_directories).await?;
-        let result = self.file_writer.get_file_info(&valid_path).await?;
+        let result = self.file_operations.get_file_info(&valid_path).await?;
         Ok(CallToolResult::success(vec![result.into()]))
     }
 
