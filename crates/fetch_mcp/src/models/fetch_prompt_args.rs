@@ -1,0 +1,1 @@
+// # DTO: FetchPromptArgs (prompt)
