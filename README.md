@@ -8,19 +8,19 @@ A collection of high-performance **Model Context Protocol (MCP) servers** built 
 
 ## 🌟 Available Servers
 
-| Server                                    | Description                                      | Status     | Crates.io                                                                                                     |
-| ----------------------------------------- | ------------------------------------------------ | ---------- | ------------------------------------------------------------------------------------------------------------- |
-| [**Time MCP Server**](./crates/time_mcp/) | Timezone-aware time operations with DST handling | ✅ Stable  | [![Crates.io](https://img.shields.io/crates/v/mcp-server-time.svg)](https://crates.io/crates/mcp-server-time) |
-| **File MCP Server**                       | File system operations and management            | 🚧 Planned | -                                                                                                             |
-| **Database MCP Server**                   | Database queries and operations                  | 🚧 Planned | -                                                                                                             |
-| **Web MCP Server**                        | HTTP requests and web scraping                   | 🚧 Planned | -                                                                                                             |
-| **System MCP Server**                     | System information and monitoring                | 🚧 Planned | -                                                                                                             |
+| Server                                        | Description                                              | Status     | Crates.io                                                                                                                 |
+| --------------------------------------------- | -------------------------------------------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------- |
+| [**Time MCP Server**](./crates/time_mcp/)     | Timezone-aware time operations with DST handling         | ✅ Stable  | [![Crates.io](https://img.shields.io/crates/v/mcp-server-time.svg)](https://crates.io/crates/mcp-server-time)             |
+| [**Filesystem MCP Server**](./crates/fs_mcp/) | Secure filesystem operations with directory allowlisting | ✅ Stable  | [![Crates.io](https://img.shields.io/crates/v/mcp-server-filesystem.svg)](https://crates.io/crates/mcp-server-filesystem) |
+| **Database MCP Server**                       | Database queries and operations                          | 🚧 Planned | -                                                                                                                         |
+| **Web MCP Server**                            | HTTP requests and web scraping                           | 🚧 Planned | -                                                                                                                         |
+| **System MCP Server**                         | System information and monitoring                        | 🚧 Planned | -                                                                                                                         |
 
 ## 🚀 Quick Start
 
 ### Prerequisites
 
-- **Rust 1.70+** - [Install Rust](https://rustup.rs/)
+- **Rust 1.85+** - [Install Rust](https://rustup.rs/)
 - **Git** - For cloning the repository
 
 ### Installation
@@ -31,8 +31,10 @@ A collection of high-performance **Model Context Protocol (MCP) servers** built 
 # Install the Time MCP Server
 cargo install mcp-server-time
 
+# Install the Filesystem MCP Server
+cargo install mcp-server-filesystem
+
 # Future servers will be available similarly
-# cargo install mcp-server-file
 # cargo install mcp-server-database
 ```
 
@@ -48,6 +50,7 @@ cargo build --release
 
 # Build specific server
 cargo build --release --bin mcp-server-time
+cargo build --release --bin mcp-server-filesystem
 
 # Run tests
 cargo test
@@ -64,6 +67,10 @@ Add servers to your Claude Desktop configuration:
   "mcpServers": {
     "time": {
       "command": "mcp-server-time"
+    },
+    "filesystem": {
+      "command": "mcp-server-filesystem",
+      "args": ["--allowed-dir", "/path/to/your/projects"]
     }
   }
 }
@@ -74,7 +81,11 @@ Add servers to your Claude Desktop configuration:
 Test any server using the MCP Inspector:
 
 ```bash
+# Test Time MCP Server
 npx @modelcontextprotocol/inspector mcp-server-time
+
+# Test Filesystem MCP Server
+npx @modelcontextprotocol/inspector mcp-server-filesystem --allowed-dir /path/to/test
 ```
 
 ### Direct Integration
@@ -102,7 +113,7 @@ This workspace follows a modular architecture with shared dependencies and consi
 rust-mcp-servers/
 ├── crates/
 │   ├── time_mcp/           # Time operations server
-│   ├── file_mcp/           # File system server (planned)
+│   ├── fs_mcp/             # Filesystem operations server
 │   ├── database_mcp/       # Database server (planned)
 │   └── shared/             # Shared utilities (planned)
 ├── examples/               # Usage examples
@@ -124,10 +135,10 @@ rust-mcp-servers/
 ### Phase 1: Core Servers ✅
 
 - [x] Time MCP Server - Timezone operations and time conversion
+- [x] Filesystem MCP Server - Secure file operations, search, and management
 
 ### Phase 2: System Integration 🚧
 
-- [ ] File MCP Server - File system operations, search, and management
 - [ ] System MCP Server - System monitoring, process management, and info
 
 ### Phase 3: Data & Web 📋
@@ -200,6 +211,7 @@ cargo test
 
 # Run tests for specific server
 cargo test --package mcp-server-time
+cargo test --package mcp-server-filesystem
 
 # Run with coverage
 cargo tarpaulin --workspace
