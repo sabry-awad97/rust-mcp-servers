@@ -126,6 +126,16 @@ pub trait FileWriter: Send + Sync {
         exclude_patterns: &[String],
     ) -> FileSystemMcpResult<WriteFileResponse>;
 
+    /// Get file information
+    ///
+    /// # Arguments
+    /// * `path` - The file path to get information for
+    ///
+    /// # Returns
+    /// * `Ok(WriteFileResponse)` - Success response with file information
+    /// * `Err(FileSystemMcpError)` - If the file cannot be retrieved
+    async fn get_file_info(&self, path: &Path) -> FileSystemMcpResult<WriteFileResponse>;
+
     /// Copy a file to a new location
     ///
     /// # Arguments

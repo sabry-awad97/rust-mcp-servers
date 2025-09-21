@@ -881,6 +881,74 @@ impl FileWriter for FileWriterService {
         Ok(WriteFileResponse::copied(from, to, size))
     }
 
+    async fn get_file_info(&self, path: &Path) -> FileSystemMcpResult<WriteFileResponse> {
+        let metadata = fs::metadata(path).await.map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                FileSystemMcpError::PathNotFound {
+                    path: path.display().to_string(),
+                }
+            } else {
+                FileSystemMcpError::IoError {
+                    message: format!("Failed to get file metadata: {}", e),
+                    path: path.display().to_string(),
+                }
+            }
+        })?;
+
+        let file_name = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+
+        let file_type = if metadata.is_dir() {
+            "[DIRECTORY]".to_string()
+        } else if metadata.is_file() {
+            "[FILE]".to_string()
+        } else {
+            "[OTHER]".to_string()
+        };
+
+        let file_info = DirectoryEntry {
+            name: file_name,
+            file_type,
+            size: metadata.len(),
+            is_directory: metadata.is_dir(),
+            modified: metadata.modified().ok(),
+        };
+
+        let info_json = serde_json::json!({
+            "name": file_info.name,
+            "type": file_info.file_type,
+            "size": file_info.size,
+            "is_directory": file_info.is_directory,
+            "modified": file_info.modified.map(|t| {
+                t.duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs()
+            }),
+            "path": path.display().to_string(),
+            "permissions": {
+                "readable": true,
+                "writable": !metadata.permissions().readonly(),
+                "executable": false
+            }
+        });
+
+        let info_string =
+            serde_json::to_string_pretty(&info_json).map_err(|e| FileSystemMcpError::IoError {
+                message: format!("Failed to serialize file info: {}", e),
+                path: path.display().to_string(),
+            })?;
+
+        Ok(WriteFileResponse::new(
+            info_string,
+            path.display().to_string(),
+            None,
+            false,
+        ))
+    }
+
     async fn write_binary_file(
         &self,
         path: &Path,
@@ -2649,5 +2717,108 @@ mod tests {
 
         assert_eq!(results.len(), 1);
         assert!(results[0].ends_with("src"));
+    }
+
+    #[tokio::test]
+    async fn test_get_file_info_file() {
+        let service = FileWriterService::new();
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let file_path = temp_dir.path().join("test_file.txt");
+
+        // Create test file
+        fs::write(&file_path, "test content").await.unwrap();
+
+        let result = service.get_file_info(&file_path).await;
+        assert!(result.is_ok());
+
+        let response = result.unwrap();
+        let info: serde_json::Value = serde_json::from_str(&response.message).unwrap();
+
+        assert_eq!(info["name"], "test_file.txt");
+        assert_eq!(info["type"], "[FILE]");
+        assert_eq!(info["size"], 12); // "test content" is 12 bytes
+        assert_eq!(info["is_directory"], false);
+        assert!(info["path"].as_str().unwrap().ends_with("test_file.txt"));
+        assert!(info["permissions"]["readable"].as_bool().unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_get_file_info_directory() {
+        let service = FileWriterService::new();
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let dir_path = temp_dir.path().join("test_dir");
+
+        // Create test directory
+        fs::create_dir(&dir_path).await.unwrap();
+
+        let result = service.get_file_info(&dir_path).await;
+        assert!(result.is_ok());
+
+        let response = result.unwrap();
+        let info: serde_json::Value = serde_json::from_str(&response.message).unwrap();
+
+        assert_eq!(info["name"], "test_dir");
+        assert_eq!(info["type"], "[DIRECTORY]");
+        assert_eq!(info["is_directory"], true);
+        assert!(info["path"].as_str().unwrap().ends_with("test_dir"));
+        assert!(info["permissions"]["readable"].as_bool().unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_get_file_info_nonexistent() {
+        let service = FileWriterService::new();
+        let nonexistent_path = Path::new("/nonexistent/file.txt");
+
+        let result = service.get_file_info(nonexistent_path).await;
+        assert!(result.is_err());
+
+        if let Err(FileSystemMcpError::PathNotFound { path }) = result {
+            assert_eq!(path, nonexistent_path.display().to_string());
+        } else {
+            panic!("Expected PathNotFound error for nonexistent file");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_file_info_empty_file() {
+        let service = FileWriterService::new();
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let file_path = temp_dir.path().join("empty_file.txt");
+
+        // Create empty file
+        fs::write(&file_path, "").await.unwrap();
+
+        let result = service.get_file_info(&file_path).await;
+        assert!(result.is_ok());
+
+        let response = result.unwrap();
+        let info: serde_json::Value = serde_json::from_str(&response.message).unwrap();
+
+        assert_eq!(info["name"], "empty_file.txt");
+        assert_eq!(info["type"], "[FILE]");
+        assert_eq!(info["size"], 0);
+        assert_eq!(info["is_directory"], false);
+    }
+
+    #[tokio::test]
+    async fn test_get_file_info_large_file() {
+        let service = FileWriterService::new();
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let file_path = temp_dir.path().join("large_file.txt");
+
+        // Create file with known size
+        let content = "a".repeat(1024); // 1KB file
+        fs::write(&file_path, &content).await.unwrap();
+
+        let result = service.get_file_info(&file_path).await;
+        assert!(result.is_ok());
+
+        let response = result.unwrap();
+        let info: serde_json::Value = serde_json::from_str(&response.message).unwrap();
+
+        assert_eq!(info["name"], "large_file.txt");
+        assert_eq!(info["type"], "[FILE]");
+        assert_eq!(info["size"], 1024);
+        assert_eq!(info["is_directory"], false);
     }
 }

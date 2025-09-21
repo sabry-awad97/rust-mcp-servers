@@ -14,8 +14,8 @@ use crate::{
     domain::{FileReader, FileWriter},
     errors::{FileSystemMcpError, ToolResult},
     models::requests::{
-        CreateDirectoryRequest, DirectoryTreeRequest, EditFileRequest, ListDirectoryRequest,
-        ListDirectoryWithSizesRequest, MoveFileRequest, ReadMediaFileRequest,
+        CreateDirectoryRequest, DirectoryTreeRequest, EditFileRequest, GetFileInfoRequest,
+        ListDirectoryRequest, ListDirectoryWithSizesRequest, MoveFileRequest, ReadMediaFileRequest,
         ReadMultipleFilesRequest, ReadTextFileRequest, SearchFilesRequest, WriteFileRequest,
     },
     service::validation::{Validate, validate_path},
@@ -241,6 +241,14 @@ impl FileSystemService {
                 req.exclude_patterns(),
             )
             .await?;
+        Ok(CallToolResult::success(vec![result.into()]))
+    }
+
+    #[tool(description = "Retrieve detailed metadata about a file or directory")]
+    async fn get_file_info(&self, Parameters(req): Parameters<GetFileInfoRequest>) -> ToolResult {
+        req.validate()?;
+        let valid_path = validate_path(req.path(), &self.allowed_directories).await?;
+        let result = self.file_writer.get_file_info(&valid_path).await?;
         Ok(CallToolResult::success(vec![result.into()]))
     }
 }

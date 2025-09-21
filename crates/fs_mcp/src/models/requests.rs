@@ -438,3 +438,27 @@ impl Validate for SearchFilesRequest {
         Ok(())
     }
 }
+
+/// Request to get file information
+#[derive(Debug, Deserialize, schemars::JsonSchema, Getters)]
+pub struct GetFileInfoRequest {
+    /// Path to the file or directory
+    path: String,
+}
+
+impl Validate for GetFileInfoRequest {
+    fn validate(&self) -> FileSystemMcpResult<()> {
+        if self.path.trim().is_empty() {
+            return Err(FileSystemMcpError::ValidationError {
+                message: "Invalid path".to_string(),
+                path: self.path.clone(),
+                operation: "get_file_info".to_string(),
+                data: serde_json::json!({
+                    "error": "Path cannot be empty",
+                    "provided_path": self.path
+                }),
+            });
+        }
+        Ok(())
+    }
+}
