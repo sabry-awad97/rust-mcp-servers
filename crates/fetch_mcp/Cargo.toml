@@ -26,6 +26,7 @@ async-trait = { workspace = true }
 base64 = { workspace = true }
 derive-getters = { workspace = true }
 futures = { workspace = true }
+fast_html2md = { workspace = true, features = ["rewriter"] }
 reqwest = { workspace = true, features = ["json"] }
 rmcp = { workspace = true, features = ["transport-io", "server", "schemars"] }
 serde = { workspace = true, features = ["derive"] }
