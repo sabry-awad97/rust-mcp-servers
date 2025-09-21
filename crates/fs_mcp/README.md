@@ -58,7 +58,12 @@ Add to your Claude Desktop MCP configuration:
   "mcpServers": {
     "filesystem": {
       "command": "mcp-server-filesystem",
-      "args": ["--allowed-dir", "/path/to/your/projects", "--allowed-dir", "/path/to/documents"]
+      "args": [
+        "--allowed-dir",
+        "/path/to/your/projects",
+        "--allowed-dir",
+        "/path/to/documents"
+      ]
     }
   }
 }
@@ -354,6 +359,71 @@ Allowed directories:
 /tmp/workspace
 ```
 
+## 📚 Available Resources
+
+The server provides built-in resources for help and status information:
+
+### `fs://status`
+
+Current server status, configuration, and capabilities information.
+
+**Example Content:**
+
+```
+Filesystem MCP Server Status
+
+Server: Running
+Allowed Directories: /home/user/projects, /home/user/documents
+Total Allowed Paths: 2
+Tools Available: 13
+Resources Available: 3
+
+Capabilities:
+- Secure file reading (text and media files)
+- File writing and editing with line-based operations
+- Directory management and navigation
+- File search with pattern matching and exclusions
+- File metadata and information retrieval
+- File operations (move, rename, copy)
+- Directory tree visualization
+- Security through directory allowlisting
+```
+
+### `fs://help`
+
+Comprehensive help documentation with tool descriptions, examples, and usage patterns.
+
+**Content includes:**
+
+- Complete tool reference with parameters and examples
+- Security model explanation
+- Pattern syntax guide
+- Example workflows for common tasks
+- Allowed directories listing
+
+### `fs://allowed-directories`
+
+Detailed information about configured allowed directories and security model.
+
+**Example Content:**
+
+```
+Allowed Directories Configuration
+
+The Filesystem MCP Server is configured with the following allowed directories.
+All file operations are restricted to these paths and their subdirectories.
+
+ALLOWED PATHS:
+  1. /home/user/projects
+  2. /home/user/documents
+
+SECURITY INFORMATION:
+- All file paths are validated against these allowed directories
+- Operations outside these paths will be rejected
+- Symlinks pointing outside allowed directories trigger warnings
+- Path traversal attempts (../) are blocked
+```
+
 ## 🔧 Configuration
 
 ### Command Line Options
@@ -395,6 +465,8 @@ Once configured, you can ask Claude:
 
 > "Show me a tree view of my project directory, excluding build artifacts"
 
+> "Show me the server status and available resources"
+
 ### With MCP Inspector
 
 ```bash
@@ -406,6 +478,7 @@ npx @modelcontextprotocol/inspector mcp-server-filesystem --allowed-dir /path/to
 # 2. Use directory_tree to explore structure
 # 3. Use search_files to find specific files
 # 4. Use edit_file to make changes with dry_run: true
+# 5. Browse resources: fs://status, fs://help, fs://allowed-directories
 ```
 
 ### Command Line Testing
@@ -419,6 +492,7 @@ npx @modelcontextprotocol/inspector mcp-server-filesystem --allowed-dir /home/us
 # - Directory operations: list_directory, directory_tree
 # - File management: write_file, edit_file, move_file
 # - Search: search_files with various patterns
+# - Resources: Browse fs://status, fs://help, fs://allowed-directories
 ```
 
 ## 🚨 Error Handling

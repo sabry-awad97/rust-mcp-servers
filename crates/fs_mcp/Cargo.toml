@@ -1,6 +1,6 @@
 [package]
 name = "mcp-server-filesystem"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 authors = ["Sabry Awad <dr.sabry1997@gmail.com>"]
 description = "A comprehensive Model Context Protocol (MCP) server for filesystem operations"

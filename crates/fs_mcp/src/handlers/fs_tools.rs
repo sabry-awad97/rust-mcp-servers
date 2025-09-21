@@ -41,6 +41,199 @@ impl FileSystemService {
             tool_router: Self::tool_router(),
         }
     }
+
+    fn create_resource_text(&self, uri: &str, name: &str) -> Resource {
+        RawResource::new(uri, name.to_string()).no_annotation()
+    }
+
+    fn generate_status_content(&self) -> String {
+        format!(
+            r#"Filesystem MCP Server Status
+
+Server: Running
+Allowed Directories: {}
+Total Allowed Paths: {}
+Tools Available: 13
+Resources Available: 3
+
+Capabilities:
+- Secure file reading (text and media files)
+- File writing and editing with line-based operations
+- Directory management and navigation
+- File search with pattern matching and exclusions
+- File metadata and information retrieval
+- File operations (move, rename, copy)
+- Directory tree visualization
+- Security through directory allowlisting
+
+Security Model:
+- All operations restricted to allowed directories
+- Path validation and normalization
+- Symlink handling with warnings
+- Input sanitization and validation"#,
+            self.allowed_directories
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", "),
+            self.allowed_directories.len()
+        )
+    }
+
+    fn generate_help_content(&self) -> String {
+        format!(
+            r#"Filesystem MCP Server Help
+
+TOOLS:
+
+FILE READING:
+- read_text_file: Read complete file contents or specific lines
+  - path: File path (required)
+  - head: Read first N lines (optional)
+  - tail: Read last N lines (optional)
+  - Example: {{"path": "/project/README.md", "head": 10}}
+
+- read_media_file: Read image/audio files as base64 with MIME type
+  - path: Media file path (required)
+  - Example: {{"path": "/images/photo.jpg"}}
+
+- read_multiple_files: Read multiple files simultaneously
+  - paths: Array of file paths (required)
+  - Example: {{"paths": ["/config.json", "/settings.yaml"]}}
+
+FILE WRITING:
+- write_file: Create or overwrite file with content
+  - path: File path (required)
+  - content: File content (required)
+  - Example: {{"path": "/project/new_file.txt", "content": "Hello World"}}
+
+- edit_file: Make line-based edits with git-style diff
+  - path: File path (required)
+  - edits: Array of edit operations (required)
+  - dry_run: Preview changes without applying (optional)
+  - Example: {{"path": "/config.py", "edits": [{{"old_text": "DEBUG = False", "new_text": "DEBUG = True"}}]}}
+
+DIRECTORY OPERATIONS:
+- create_directory: Create directory and parent directories
+  - path: Directory path (required)
+  - Example: {{"path": "/project/new_folder/subfolder"}}
+
+- list_directory: List directory contents
+  - path: Directory path (required)
+  - Example: {{"path": "/project"}}
+
+- list_directory_with_sizes: List directory with file sizes and sorting
+  - path: Directory path (required)
+  - sort_by: Sort criteria - "name", "size", "modified" (optional)
+  - Example: {{"path": "/project", "sort_by": "size"}}
+
+- directory_tree: Get recursive directory tree as JSON
+  - path: Root directory path (required)
+  - exclude_patterns: Glob patterns to exclude (optional)
+  - Example: {{"path": "/project", "exclude_patterns": ["*.log", "node_modules/**"]}}
+
+FILE MANAGEMENT:
+- move_file: Move or rename files and directories
+  - source: Source path (required)
+  - destination: Destination path (required)
+  - Example: {{"source": "/old_name.txt", "destination": "/new_name.txt"}}
+
+- search_files: Search for files matching patterns
+  - path: Search directory (required)
+  - pattern: Glob pattern (required)
+  - exclude_patterns: Patterns to exclude (optional)
+  - Example: {{"path": "/project", "pattern": "*.rs", "exclude_patterns": ["target/**"]}}
+
+- get_file_info: Get detailed file/directory metadata
+  - path: File or directory path (required)
+  - Example: {{"path": "/project/config.json"}}
+
+UTILITY:
+- list_allowed_directories: Show allowed directory paths
+  - No parameters required
+
+RESOURCES:
+- fs://status: Current server status and configuration
+- fs://help: This help documentation
+- fs://allowed-directories: List of allowed directory paths
+
+ALLOWED DIRECTORIES:
+{}
+
+SECURITY NOTES:
+- All operations are restricted to allowed directories
+- Paths are validated and normalized for security
+- Symlinks are handled safely with warnings
+- Error messages don't leak sensitive information
+
+PATTERN SYNTAX:
+- Use glob patterns: *.txt, **/*.rs, src/**
+- Exclude patterns support: ["*.log", "target/**", ".git/**"]
+- Case-sensitive matching on most systems
+
+EXAMPLE WORKFLOWS:
+
+1. Explore Project Structure:
+   - Use directory_tree to get overview
+   - Use list_directory for specific folders
+   - Use search_files to find specific file types
+
+2. Read and Edit Files:
+   - Use read_text_file to examine content
+   - Use edit_file for precise line-based changes
+   - Use write_file for new files or complete rewrites
+
+3. File Management:
+   - Use move_file to organize files
+   - Use get_file_info for metadata
+   - Use create_directory for new folder structures"#,
+            self.allowed_directories
+                .iter()
+                .map(|p| format!("- {}", p.display()))
+                .collect::<Vec<_>>()
+                .join("\n")
+        )
+    }
+
+    fn generate_allowed_directories_content(&self) -> String {
+        format!(
+            r#"Allowed Directories Configuration
+
+The Filesystem MCP Server is configured with the following allowed directories.
+All file operations are restricted to these paths and their subdirectories.
+
+ALLOWED PATHS:
+{}
+
+TOTAL DIRECTORIES: {}
+
+SECURITY INFORMATION:
+- All file paths are validated against these allowed directories
+- Operations outside these paths will be rejected
+- Symlinks pointing outside allowed directories trigger warnings
+- Path traversal attempts (../) are blocked
+- Relative paths are resolved within allowed directories
+
+USAGE NOTES:
+- Use absolute paths when possible for clarity
+- All subdirectories within allowed paths are accessible
+- Hidden files and directories (starting with .) are accessible
+- File permissions are respected by the underlying filesystem
+
+To modify allowed directories, restart the server with different --allowed-dir arguments."#,
+            if self.allowed_directories.is_empty() {
+                "  No directories currently allowed (server in restricted mode)".to_string()
+            } else {
+                self.allowed_directories
+                    .iter()
+                    .enumerate()
+                    .map(|(i, p)| format!("  {}. {}", i + 1, p.display()))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            },
+            self.allowed_directories.len()
+        )
+    }
 }
 
 #[tool_router]
@@ -277,10 +470,73 @@ impl ServerHandler for FileSystemService {
             protocol_version: ProtocolVersion::V_2024_11_05,
             capabilities: ServerCapabilities::builder()
                 .enable_tools()
+                .enable_resources()
                 .build(),
             server_info: Implementation::from_build_env(),
-            instructions: Some("FileSystem MCP Server for secure file operations. Tools: read_text_file, read_media_file, read_multiple_files, write_file, edit_file, create_directory, list_directory, list_directory_with_sizes, directory_tree, move_file, search_files, get_file_info, list_allowed_directories. All operations are restricted to allowed directories for security.".to_string()),
+            instructions: Some("FileSystem MCP Server for secure file operations. Tools: read_text_file, read_media_file, read_multiple_files, write_file, edit_file, create_directory, list_directory, list_directory_with_sizes, directory_tree, move_file, search_files, get_file_info, list_allowed_directories. All operations are restricted to allowed directories for security. Resources: fs://status, fs://help, fs://allowed-directories.".to_string()),
         }
+    }
+
+    async fn list_resources(
+        &self,
+        _request: Option<PaginatedRequestParam>,
+        _: RequestContext<RoleServer>,
+    ) -> Result<ListResourcesResult, McpError> {
+        Ok(ListResourcesResult {
+            resources: vec![
+                self.create_resource_text("fs://status", "server-status"),
+                self.create_resource_text("fs://help", "help-documentation"),
+                self.create_resource_text("fs://allowed-directories", "allowed-directories-list"),
+            ],
+            next_cursor: None,
+        })
+    }
+
+    async fn read_resource(
+        &self,
+        ReadResourceRequestParam { uri }: ReadResourceRequestParam,
+        _: RequestContext<RoleServer>,
+    ) -> Result<ReadResourceResult, McpError> {
+        match uri.as_str() {
+            "fs://status" => {
+                let status = self.generate_status_content();
+                Ok(ReadResourceResult {
+                    contents: vec![ResourceContents::text(status, uri)],
+                })
+            }
+            "fs://help" => {
+                let help = self.generate_help_content();
+                Ok(ReadResourceResult {
+                    contents: vec![ResourceContents::text(help, uri)],
+                })
+            }
+            "fs://allowed-directories" => {
+                let directories = self.generate_allowed_directories_content();
+                Ok(ReadResourceResult {
+                    contents: vec![ResourceContents::text(directories, uri)],
+                })
+            }
+            _ => Err(FileSystemMcpError::ValidationError {
+                message: format!("Resource not found: {}", uri),
+                path: uri.to_string(),
+                operation: "read_resource".to_string(),
+                data: serde_json::json!({
+                    "available_resources": ["fs://status", "fs://help", "fs://allowed-directories"]
+                }),
+            }
+            .into()),
+        }
+    }
+
+    async fn list_resource_templates(
+        &self,
+        _request: Option<PaginatedRequestParam>,
+        _: RequestContext<RoleServer>,
+    ) -> Result<ListResourceTemplatesResult, McpError> {
+        Ok(ListResourceTemplatesResult {
+            next_cursor: None,
+            resource_templates: Vec::new(),
+        })
     }
 
     async fn initialize(
