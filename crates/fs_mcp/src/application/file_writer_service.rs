@@ -57,7 +57,7 @@ impl FileWriterService {
 
     /// Helper method to check if path exists
     async fn path_exists(&self, path: &Path) -> bool {
-        fs::metadata(path).await.is_ok()
+        self.get_file_size(path).await.is_ok()
     }
 
     /// Helper method to ensure parent directory exists
@@ -742,40 +742,6 @@ impl FileWriter for FileWriterService {
         }
     }
 
-    async fn delete_file(&self, path: &Path) -> FileSystemMcpResult<WriteFileResponse> {
-        if !self.path_exists(path).await {
-            return Err(FileSystemMcpError::PathNotFound {
-                path: path.display().to_string(),
-            });
-        }
-
-        fs::remove_file(path)
-            .await
-            .map_err(|e| FileSystemMcpError::IoError {
-                message: format!("Failed to delete file: {}", e),
-                path: path.display().to_string(),
-            })?;
-
-        Ok(WriteFileResponse::deleted(path, false))
-    }
-
-    async fn delete_directory(&self, path: &Path) -> FileSystemMcpResult<WriteFileResponse> {
-        if !self.path_exists(path).await {
-            return Err(FileSystemMcpError::PathNotFound {
-                path: path.display().to_string(),
-            });
-        }
-
-        fs::remove_dir_all(path)
-            .await
-            .map_err(|e| FileSystemMcpError::IoError {
-                message: format!("Failed to delete directory: {}", e),
-                path: path.display().to_string(),
-            })?;
-
-        Ok(WriteFileResponse::deleted(path, true))
-    }
-
     async fn move_file(&self, from: &Path, to: &Path) -> FileSystemMcpResult<WriteFileResponse> {
         if !self.path_exists(from).await {
             return Err(FileSystemMcpError::PathNotFound {
@@ -848,39 +814,6 @@ impl FileWriter for FileWriterService {
         ))
     }
 
-    async fn copy_file(&self, from: &Path, to: &Path) -> FileSystemMcpResult<WriteFileResponse> {
-        if !self.path_exists(from).await {
-            return Err(FileSystemMcpError::PathNotFound {
-                path: from.display().to_string(),
-            });
-        }
-
-        // Ensure destination parent directory exists
-        self.ensure_parent_dir(to)
-            .await
-            .map_err(|e| FileSystemMcpError::IoError {
-                message: format!("Failed to create destination directory: {}", e),
-                path: to.display().to_string(),
-            })?;
-
-        fs::copy(from, to)
-            .await
-            .map_err(|e| FileSystemMcpError::IoError {
-                message: format!("Failed to copy file: {}", e),
-                path: format!("{} -> {}", from.display(), to.display()),
-            })?;
-
-        let size = self
-            .get_file_size(to)
-            .await
-            .map_err(|e| FileSystemMcpError::IoError {
-                message: format!("Failed to get copied file size: {}", e),
-                path: to.display().to_string(),
-            })?;
-
-        Ok(WriteFileResponse::copied(from, to, size))
-    }
-
     async fn get_file_info(&self, path: &Path) -> FileSystemMcpResult<WriteFileResponse> {
         let metadata = fs::metadata(path).await.map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
@@ -947,33 +880,6 @@ impl FileWriter for FileWriterService {
             None,
             false,
         ))
-    }
-
-    async fn write_binary_file(
-        &self,
-        path: &Path,
-        data: &[u8],
-    ) -> FileSystemMcpResult<WriteFileResponse> {
-        let file_existed = self.path_exists(path).await;
-
-        // Ensure parent directory exists
-        self.ensure_parent_dir(path)
-            .await
-            .map_err(|e| FileSystemMcpError::IoError {
-                message: format!("Failed to create parent directory: {}", e),
-                path: path.display().to_string(),
-            })?;
-
-        // Write the binary data
-        fs::write(path, data)
-            .await
-            .map_err(|e| FileSystemMcpError::IoError {
-                message: format!("Failed to write binary file: {}", e),
-                path: path.display().to_string(),
-            })?;
-
-        let size = data.len() as u64;
-        Ok(WriteFileResponse::file_written(path, size, !file_existed))
     }
 }
 
@@ -1471,38 +1377,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_delete_file() {
-        let service = FileWriterService::new();
-        let temp_file = create_temp_file_with_content("test content").await;
-        let file_path = temp_file.path().to_path_buf();
-
-        // File should exist initially
-        assert!(file_path.exists());
-
-        let result = service.delete_file(&file_path).await;
-        assert!(result.is_ok());
-
-        let response = result.unwrap();
-        assert!(!response.created);
-
-        // Verify file was deleted
-        assert!(!file_path.exists());
-    }
-
-    #[tokio::test]
-    async fn test_delete_nonexistent_file() {
-        let service = FileWriterService::new();
-        let nonexistent_path = std::path::Path::new("/nonexistent/file.txt");
-
-        let result = service.delete_file(nonexistent_path).await;
-        assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            FileSystemMcpError::PathNotFound { .. }
-        ));
-    }
-
-    #[tokio::test]
     async fn test_move_file() {
         let service = FileWriterService::new();
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
@@ -1519,49 +1393,6 @@ mod tests {
 
         let content = fs::read_to_string(&dest_path).await.unwrap();
         assert_eq!(content, "test content");
-    }
-
-    #[tokio::test]
-    async fn test_copy_file() {
-        let service = FileWriterService::new();
-        let temp_dir = TempDir::new().expect("Failed to create temp dir");
-        let temp_file = create_temp_file_with_content("test content").await;
-        let source_path = temp_file.path();
-        let dest_path = temp_dir.path().join("copied_file.txt");
-
-        let result = service.copy_file(source_path, &dest_path).await;
-        assert!(result.is_ok());
-
-        let response = result.unwrap();
-        assert!(response.created);
-
-        // Verify both files exist with same content
-        assert!(source_path.exists());
-        assert!(dest_path.exists());
-
-        let source_content = fs::read_to_string(source_path).await.unwrap();
-        let dest_content = fs::read_to_string(&dest_path).await.unwrap();
-        assert_eq!(source_content, dest_content);
-        assert_eq!(dest_content, "test content");
-    }
-
-    #[tokio::test]
-    async fn test_write_binary_file() {
-        let service = FileWriterService::new();
-        let temp_dir = TempDir::new().expect("Failed to create temp dir");
-        let file_path = temp_dir.path().join("binary_file.bin");
-        let binary_data = vec![0x00, 0x01, 0x02, 0x03, 0xFF];
-
-        let result = service.write_binary_file(&file_path, &binary_data).await;
-        assert!(result.is_ok());
-
-        let response = result.unwrap();
-        assert!(response.created);
-        assert_eq!(response.size, Some(binary_data.len() as u64));
-
-        // Verify binary data was written correctly
-        let written_data = fs::read(&file_path).await.unwrap();
-        assert_eq!(written_data, binary_data);
     }
 
     #[tokio::test]

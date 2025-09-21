@@ -251,6 +251,18 @@ impl FileSystemService {
         let result = self.file_writer.get_file_info(&valid_path).await?;
         Ok(CallToolResult::success(vec![result.into()]))
     }
+
+    #[tool(description = "Returns the list of directories that this server is allowed to access")]
+    async fn list_allowed_directories(&self) -> ToolResult {
+        let directories: Vec<String> = self
+            .allowed_directories
+            .iter()
+            .map(|p| p.to_string_lossy().to_string())
+            .collect();
+
+        let result = format!("Allowed directories:\n{}", directories.join("\n"));
+        Ok(CallToolResult::success(vec![Content::text(result)]))
+    }
 }
 
 #[tool_handler]
