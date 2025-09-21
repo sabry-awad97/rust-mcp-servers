@@ -344,3 +344,55 @@ impl Validate for DirectoryTreeRequest {
         Ok(())
     }
 }
+
+/// Request to move/rename a file
+#[derive(Debug, Deserialize, schemars::JsonSchema, Getters)]
+pub struct MoveFileRequest {
+    /// Source path
+    source: String,
+    /// Destination path
+    destination: String,
+}
+
+impl Validate for MoveFileRequest {
+    fn validate(&self) -> FileSystemMcpResult<()> {
+        if self.source.trim().is_empty() {
+            return Err(FileSystemMcpError::ValidationError {
+                message: "Invalid source path".to_string(),
+                path: self.source.clone(),
+                operation: "move_file".to_string(),
+                data: serde_json::json!({
+                    "error": "Source path cannot be empty",
+                    "provided_source": self.source
+                }),
+            });
+        }
+
+        if self.destination.trim().is_empty() {
+            return Err(FileSystemMcpError::ValidationError {
+                message: "Invalid destination path".to_string(),
+                path: self.destination.clone(),
+                operation: "move_file".to_string(),
+                data: serde_json::json!({
+                    "error": "Destination path cannot be empty",
+                    "provided_destination": self.destination
+                }),
+            });
+        }
+
+        if self.source == self.destination {
+            return Err(FileSystemMcpError::ValidationError {
+                message: "Source and destination paths cannot be the same".to_string(),
+                path: self.source.clone(),
+                operation: "move_file".to_string(),
+                data: serde_json::json!({
+                    "error": "Source and destination must be different",
+                    "source": self.source,
+                    "destination": self.destination
+                }),
+            });
+        }
+
+        Ok(())
+    }
+}

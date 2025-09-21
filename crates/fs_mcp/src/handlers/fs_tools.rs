@@ -15,8 +15,8 @@ use crate::{
     errors::{FileSystemMcpError, ToolResult},
     models::requests::{
         CreateDirectoryRequest, DirectoryTreeRequest, EditFileRequest, ListDirectoryRequest,
-        ListDirectoryWithSizesRequest, ReadMediaFileRequest, ReadMultipleFilesRequest,
-        ReadTextFileRequest, WriteFileRequest,
+        ListDirectoryWithSizesRequest, MoveFileRequest, ReadMediaFileRequest,
+        ReadMultipleFilesRequest, ReadTextFileRequest, WriteFileRequest,
     },
     service::validation::{Validate, validate_path},
 };
@@ -216,6 +216,15 @@ impl FileSystemService {
             .file_writer
             .directory_tree(&valid_path, req.exclude_patterns())
             .await?;
+        Ok(CallToolResult::success(vec![result.into()]))
+    }
+
+    #[tool(description = "Move or rename files and directories")]
+    async fn move_file(&self, Parameters(req): Parameters<MoveFileRequest>) -> ToolResult {
+        req.validate()?;
+        let valid_from = validate_path(req.source(), &self.allowed_directories).await?;
+        let valid_to = validate_path(req.destination(), &self.allowed_directories).await?;
+        let result = self.file_writer.move_file(&valid_from, &valid_to).await?;
         Ok(CallToolResult::success(vec![result.into()]))
     }
 }
