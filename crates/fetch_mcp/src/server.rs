@@ -1,4 +1,4 @@
-use crate::services::FetchService;
+use crate::services::{FetchService, Validate};
 use rmcp::{
     ErrorData as McpError, RoleServer, ServerHandler,
     handler::server::{
@@ -18,15 +18,15 @@ use crate::models::{FetchPromptArgs, FetchRequest};
 pub struct FetchServer {
     tool_router: ToolRouter<FetchServer>,
     prompt_router: PromptRouter<FetchServer>,
-    fetch_service: FetchService,
+    service: FetchService,
 }
 
 impl FetchServer {
-    pub fn new(fetch_service: FetchService) -> Self {
+    pub fn new(service: FetchService) -> Self {
         Self {
             tool_router: Self::tool_router(),
             prompt_router: Self::prompt_router(),
-            fetch_service,
+            service,
         }
     }
 }
@@ -38,9 +38,46 @@ impl FetchServer {
     )]
     async fn fetch(
         &self,
-        Parameters(_req): Parameters<FetchRequest>,
+        Parameters(req): Parameters<FetchRequest>,
     ) -> Result<CallToolResult, McpError> {
-        unimplemented!()
+        req.validate()?;
+        // Check robots.txt for autonomous fetching
+        self.service
+            .check_may_autonomously_fetch_url(req.url())
+            .await
+            .map_err(|e| -> McpError { e.into() })?;
+
+        let (content, prefix) = self
+            .service
+            .fetch_url(req.url(), req.raw().to_owned())
+            .await?;
+
+        let original_length = content.len();
+        let final_content = if *req.start_index() >= original_length {
+            "<error>No more content available.</error>".to_string()
+        } else {
+            let end_index = std::cmp::min(*req.start_index() + *req.max_length(), original_length);
+            let truncated_content = &content[*req.start_index()..end_index];
+
+            if truncated_content.is_empty() {
+                "<error>No more content available.</error>".to_string()
+            } else {
+                let mut result = truncated_content.to_string();
+                let actual_content_length = truncated_content.len();
+                let remaining_content =
+                    original_length - (req.start_index() + actual_content_length);
+
+                // Add continuation prompt if content was truncated
+                if actual_content_length == *req.max_length() && remaining_content > 0 {
+                    let next_start = req.start_index() + actual_content_length;
+                    result.push_str(&format!("\n\n<error>Content truncated. Call the fetch tool with a start_index of {} to get more content.</error>", next_start));
+                }
+                result
+            }
+        };
+        let response_text = format!("{}Contents of {}:\n{}", prefix, req.url(), final_content);
+
+        Ok(CallToolResult::success(vec![Content::text(response_text)]))
     }
 }
 
@@ -88,7 +125,7 @@ pub async fn run(
     proxy_url: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Create the fetch service with configuration
-    let service = FetchService::default();
+    let service = FetchService::new(user_agent, ignore_robots_txt, proxy_url);
     let server = FetchServer::new(service);
 
     // Create an instance of our Fetch service and serve it
@@ -122,24 +159,8 @@ mod tests {
         let service = FetchService::default();
         let server = FetchServer::new(service);
 
-        // Test empty URL
-        let empty_req = FetchRequest {
-            url: String::new(),
-            max_length: 5000,
-            start_index: 0,
-            raw: false,
-        };
-        let result = server.fetch(Parameters(empty_req)).await;
-        assert!(result.is_err());
-
-        // Test invalid max_length
-        let invalid_req = FetchRequest {
-            url: "https://example.com".to_string(),
-            max_length: 0,
-            start_index: 0,
-            raw: false,
-        };
-        let result = server.fetch(Parameters(invalid_req)).await;
+        // Test invalid
+        let result = server.fetch(Parameters(FetchRequest::INVALID)).await;
         assert!(result.is_err());
     }
 

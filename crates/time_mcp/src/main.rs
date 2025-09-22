@@ -18,8 +18,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Initialize the tracing subscriber with file and stdout logging
         tracing_subscriber::fmt()
             .with_env_filter(
-                EnvFilter::try_from_default_env()
-                    .unwrap_or_else(|_| EnvFilter::new(&log_level))
+                EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(&log_level)),
             )
             .with_writer(std::io::stderr)
             .with_ansi(false)
