@@ -206,6 +206,19 @@ function mapMcpToolsToAiTools(
               arguments: args,
             });
             console.log(`✓ ${tool.originalName} completed`);
+
+            // Display beautiful result immediately after execution
+            const formattedResult = JSON.stringify(result, null, 2);
+
+            console.log(
+              boxen(rainbow("🎉 Tool Result:\n\n") + formattedResult, {
+                padding: 1,
+                margin: 1,
+                borderStyle: "round",
+                borderColor: "green",
+              })
+            );
+
             return result;
           } catch (error) {
             console.error(`✗ ${tool.originalName} failed:`, error);
@@ -542,7 +555,7 @@ async function main() {
 - Before any tool is executed, the user must explicitly approve it
 - When you want to use a tool, the user will see a detailed approval prompt showing:
   - Tool name and description
-  - Which server it comes from
+  - Which server it comes from  
   - The exact arguments you want to pass
 - The user can approve (y/yes) or deny (n/no) each tool call
 - If denied, you'll receive a message explaining the user chose not to execute that tool
@@ -553,29 +566,37 @@ You have access to tools from multiple servers:
 - **Time**: Get current time, convert between timezones, time calculations  
 - **Fetch**: Retrieve web content, fetch URLs, convert HTML to markdown
 
-## Best Practices
-1. **Explain Your Plan**: Before using any tools, explain what you plan to do and which tools you'll need
-2. **Be Transparent**: Clearly state why you need to use specific tools and what you expect them to accomplish
-3. **Handle Denials Gracefully**: If a tool is denied, suggest alternatives or ask for different approaches
-4. **Minimize Tool Calls**: Only use tools when necessary, don't make redundant calls
-5. **Respect User Choices**: If the user denies a tool, don't repeatedly ask for the same tool
-6. **Provide Context**: Always explain your reasoning and expected outcomes before tool execution
-7. **Be Helpful**: Offer alternative solutions when tools are unavailable or denied
+## CRITICAL: Always Explain Your Plan First
+NEVER execute tools without first explaining your approach. For EVERY user request:
 
-## Tool Usage Protocol
-ALWAYS follow this pattern:
-1. **Announce Your Plan**: "To accomplish this, I'll need to use [tool names] to [specific purposes]"
-2. **Explain Each Step**: Describe what each tool will do and why it's necessary
-3. **Set Expectations**: Let the user know what information you're looking for
-4. **Execute Tools**: Proceed with tool calls only after explaining your approach
+1. **Start with your plan**: "To [accomplish the task], I'll need to:"
+2. **List the tools**: Explain which specific tools you'll use and why
+3. **Explain the sequence**: Describe the order of operations
+4. **Set expectations**: Tell the user what you're looking for
+5. **Then execute**: Only after explaining, proceed with tool calls
+
+## Example Response Pattern:
+User: "Read my README.md file"
+You: "To read your README.md file, I'll need to:
+1. First use 'list_allowed_directories' to see what directories I can access
+2. Then use 'read_text_file' to read the actual README.md content
+Let me start by checking the available directories..."
+
+## Best Practices
+1. **Always Explain First**: Never use tools without explaining your plan
+2. **Be Proactive**: Use available tools to solve problems, don't just ask for paths
+3. **Handle Denials Gracefully**: If a tool is denied, suggest alternatives
+4. **Minimize Tool Calls**: Only use tools when necessary
+5. **Respect User Choices**: If denied, don't repeatedly ask for the same tool
+6. **Be Helpful**: Offer alternative solutions when tools are unavailable
 
 ## Communication Style
-- Be clear and concise about what tools you need and why
-- Acknowledge when users deny tool calls and explain alternative approaches
-- Provide helpful suggestions when tools aren't available
-- Always prioritize user privacy and security
+- Always start responses by explaining your planned approach
+- Be clear about which tools you'll use and why
+- Acknowledge when users deny tool calls and explain alternatives
+- Prioritize using available tools over asking users for information
 
-Remember: Every tool call requires user approval, so be thoughtful about which tools you request and explain your reasoning clearly.`,
+Remember: ALWAYS explain your plan before executing any tools. Users want to see your reasoning process.`,
         messages,
         tools: aiTools,
         stopWhen: stepCountIs(20),
@@ -657,22 +678,8 @@ Remember: Every tool call requires user approval, so be thoughtful about which t
               }
             )
           );
-          // Display tool results
-          if (toolResults && toolResults.length > 0) {
-            const formattedResults = JSON.stringify(toolResults, null, 2)
-              .split("\n")
-              .map((line) => (line.length > 0 ? `  ${line}` : line))
-              .join("\n");
-
-            console.log(
-              boxen(rainbow("🔧 Tool Results:\n") + formattedResults, {
-                padding: 1,
-                margin: 1,
-                borderStyle: "round",
-                borderColor: "green",
-              })
-            );
-          }
+          // Tool results are now displayed immediately after execution
+          // No need to display them again here
         },
       });
 
