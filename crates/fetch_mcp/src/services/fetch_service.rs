@@ -72,10 +72,10 @@ impl FetchService {
 
         if status == 401 || status == 403 {
             return Err(FetchServerError::RobotsForbidden {
-                url: robots_txt_url,
+                url: robots_txt_url.clone(),
                 message: format!(
-                    "When fetching robots.txt, received status {} so assuming that autonomous fetching is not allowed, the user can try manually fetching by using the fetch prompt",
-                    status.as_u16()
+                    "When fetching robots.txt ({}), received status {} so assuming that autonomous fetching is not allowed, the user can try manually fetching by using the fetch prompt",
+                    robots_txt_url, status.as_u16()
                 ),
             });
         }
@@ -124,8 +124,8 @@ impl FetchService {
                 return Err(FetchServerError::RobotsDisallowed {
                     url: url.to_string(),
                     message: format!(
-                        "The sites robots.txt specifies that autonomous fetching of this page is not allowed, <useragent>{}</useragent>\n<url>{}</url><robots>\n{}\n</robots>\nThe assistant must let the user know that it failed to view the page. The assistant may provide further guidance based on the above information.\nThe assistant can tell the user that they can try manually fetching the page by using the fetch prompt within their UI.",
-                        user_agent, url, robots_txt
+                        "The sites robots.txt ({}), specifies that autonomous fetching of this page is not allowed, <useragent>{}</useragent>\n<url>{}</url><robots>\n{}\n</robots>\nThe assistant must let the user know that it failed to view the page. The assistant may provide further guidance based on the above information.\nThe assistant can tell the user that they can try manually fetching the page by using the fetch prompt within their UI.",
+                        robots_txt_url, user_agent, url, robots_txt
                     ),
                 });
             }
@@ -152,7 +152,7 @@ impl FetchService {
             })?;
 
         let status = response.status();
-        if status.is_client_error() || status.is_server_error() {
+        if status.as_u16() >= 400 {
             return Err(FetchServerError::HttpError {
                 url: url.to_string(),
                 status: status.as_u16(),

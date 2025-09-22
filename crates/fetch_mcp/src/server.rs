@@ -95,30 +95,21 @@ impl FetchServer {
         _ctx: RequestContext<rmcp::RoleServer>,
     ) -> Result<GetPromptResult, McpError> {
         args.validate()?;
-        match self
+        
+        let (content, prefix) = self
             .service
             .fetch_url(args.url(), self.service.get_user_agent_manual(), false)
             .await
-            .map_err(|e| -> McpError { e.into() })
-        {
-            Ok((content, prefix)) => {
-                let full_content = format!("{}{}", prefix, content);
-                Ok(GetPromptResult {
-                    description: Some(format!("Contents of {}", args.url())),
-                    messages: vec![PromptMessage {
-                        role: PromptMessageRole::User,
-                        content: PromptMessageContent::text(full_content),
-                    }],
-                })
-            }
-            Err(e) => Ok(GetPromptResult {
-                description: Some(format!("Failed to fetch {}", args.url())),
-                messages: vec![PromptMessage {
-                    role: PromptMessageRole::User,
-                    content: PromptMessageContent::text(format!("Error: {}", e)),
-                }],
-            }),
-        }
+            .map_err(|e| -> McpError { e.into() })?;
+            
+        let full_content = format!("{}{}", prefix, content);
+        Ok(GetPromptResult {
+            description: Some(format!("Contents of {}", args.url())),
+            messages: vec![PromptMessage {
+                role: PromptMessageRole::User,
+                content: PromptMessageContent::text(full_content),
+            }],
+        })
     }
 }
 

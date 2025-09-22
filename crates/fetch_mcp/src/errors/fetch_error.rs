@@ -39,36 +39,36 @@ impl From<FetchServerError> for McpError {
     fn from(err: FetchServerError) -> Self {
         match err {
             FetchServerError::InvalidUrl { url } => {
-                McpError::invalid_params(ERROR_INVALID_URL, Some(json!({ "url": url })))
+                McpError::invalid_params(format!("Invalid URL: {}", url), None)
             }
             FetchServerError::FetchError { url, message } => McpError::internal_error(
-                ERROR_FETCH_ERROR,
-                Some(json!({ "url": url, "message": message })),
+                format!("Failed to fetch {}: {}", url, message),
+                None,
             ),
             FetchServerError::HttpError { url, status } => McpError::internal_error(
-                ERROR_HTTP_ERROR,
-                Some(json!({ "url": url, "status": status })),
+                format!("Failed to fetch {} - status code {}", url, status),
+                None,
             ),
             FetchServerError::ContentError { message } => {
-                McpError::internal_error(ERROR_CONTENT_ERROR, Some(json!({ "message": message })))
+                McpError::internal_error(message, None)
             }
             FetchServerError::ClientError { message } => {
-                McpError::internal_error(ERROR_CLIENT_ERROR, Some(json!({ "message": message })))
+                McpError::internal_error(message, None)
             }
             FetchServerError::RobotsFetchError { url, message } => McpError::internal_error(
-                ERROR_ROBOTS_FETCH_ERROR,
-                Some(json!({ "url": url, "message": message })),
+                format!("Failed to fetch robots.txt {} due to a connection issue", url),
+                None,
             ),
             FetchServerError::RobotsForbidden { url, message } => McpError::internal_error(
-                ERROR_ROBOTS_FORBIDDEN,
-                Some(json!({ "url": url, "message": message })),
+                message,
+                None,
             ),
             FetchServerError::RobotsDisallowed { url, message } => McpError::internal_error(
-                ERROR_ROBOTS_DISALLOWED,
-                Some(json!({ "url": url, "message": message })),
+                message,
+                None,
             ),
             FetchServerError::InvalidParams { message } => {
-                McpError::invalid_params(ERROR_INVALID_PARAMS, Some(json!({ "message": message })))
+                McpError::invalid_params(message, None)
             }
         }
     }
