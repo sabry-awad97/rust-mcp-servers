@@ -3,17 +3,23 @@
     "time": {
       "command": "mcp-server-time",
       "args": [],
-      "env": {}
+      "env": {},
+      "disabled": false,
+      "autoApprove": []
     },
     "filesystem": {
       "command": "mcp-server-filesystem",
       "args": ["."],
-      "env": {}
+      "env": {},
+      "disabled": false,
+      "autoApprove": ["read_text_file"]
     },
     "fetch": {
       "command": "mcp-server-fetch",
       "args": [],
-      "env": {}
+      "env": {},
+      "disabled": false,
+      "autoApprove": []
     }
   }
 }

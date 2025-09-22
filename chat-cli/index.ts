@@ -29,6 +29,8 @@ const ServerConfigSchema = z.object({
   command: z.string().min(1, "Command cannot be empty"),
   args: z.array(z.string()).optional().default([]),
   env: z.record(z.string(), z.string()).optional(),
+  disabled: z.boolean().optional().default(false),
+  autoApprove: z.array(z.string()).optional().default([]),
 });
 
 const ServersConfigSchema = z.object({
@@ -48,6 +50,7 @@ interface EnhancedTool {
   description?: string;
   inputSchema: unknown;
   serverName: string;
+  autoApprove: string[];
 }
 
 function createUniqueToolName(
@@ -109,6 +112,7 @@ function mapMcpToolsToAiTools(
       description: tool.description,
       inputSchema: tool.inputSchema,
       serverName: tool.serverName,
+      autoApprove: (tool as any).autoApprove || [],
     };
 
     toolMapping.set(uniqueName, enhancedTool);
@@ -130,7 +134,7 @@ function mapMcpToolsToAiTools(
     );
   }
 
-  // Second pass: create AI tools
+  // Second pass: create AI tools WITH approval-based execute function
   const aiTools = enhancedTools.reduce((acc, tool) => {
     const serverClient = serverClients.find(
       (sc) => sc.serverName === tool.serverName
@@ -146,17 +150,79 @@ function mapMcpToolsToAiTools(
       }]`,
       inputSchema: jsonSchema(tool.inputSchema),
       execute: async (args: Record<string, any>) => {
-        console.log(`Executing ${tool.originalName} on ${tool.serverName}...`);
-        try {
-          const result = await serverClient.client.callTool({
-            name: tool.originalName, // Use original name for the actual call
-            arguments: args,
-          });
-          console.log(`✓ ${tool.originalName} completed`);
-          return result;
-        } catch (error) {
-          console.error(`✗ ${tool.originalName} failed:`, error);
-          throw error;
+        // Check if tool is auto-approved
+        const isAutoApproved = tool.autoApprove.includes(tool.originalName);
+
+        if (isAutoApproved) {
+          console.log(
+            boxen(
+              rainbow("🔧 Auto-Approved Tool Call:\n\n") +
+                `Tool: ${summer(tool.originalName)}\n` +
+                `Server: ${cristal(tool.serverName)}\n` +
+                `Description: ${tool.description || "No description"}\n\n` +
+                `Arguments:\n${JSON.stringify(args, null, 2)}`,
+              {
+                padding: 1,
+                margin: 1,
+                borderStyle: "round",
+                borderColor: "green",
+              }
+            )
+          );
+        } else {
+          // Display tool call for approval
+          console.log(
+            boxen(
+              rainbow("🔧 Tool Call Approval Required:\n\n") +
+                `Tool: ${summer(tool.originalName)}\n` +
+                `Server: ${cristal(tool.serverName)}\n` +
+                `Description: ${tool.description || "No description"}\n\n` +
+                `Arguments:\n${JSON.stringify(args, null, 2)}`,
+              {
+                padding: 1,
+                margin: 1,
+                borderStyle: "round",
+                borderColor: "yellow",
+              }
+            )
+          );
+        }
+
+        // Ask for user approval (skip if auto-approved)
+        let approved = isAutoApproved;
+        if (!isAutoApproved) {
+          const approval = await terminal.question(
+            `${fruit("⚠️  Approve tool call?")} (y/n): `
+          );
+          approved =
+            approval.toLowerCase() === "y" || approval.toLowerCase() === "yes";
+        }
+
+        if (approved) {
+          try {
+            console.log(`Executing ${tool.originalName}...`);
+            const result = await serverClient.client.callTool({
+              name: tool.originalName,
+              arguments: args,
+            });
+            console.log(`✓ ${tool.originalName} completed`);
+            return result;
+          } catch (error) {
+            console.error(`✗ ${tool.originalName} failed:`, error);
+            throw error;
+          }
+        } else {
+          console.log(fruit("❌ Tool call denied by user"));
+          // Return a structured response that informs the AI about the denial
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Tool call "${tool.originalName}" was denied by the user. The user chose not to execute this tool. Please continue without using this tool or ask the user for an alternative approach.`,
+              },
+            ],
+            isError: false,
+          };
         }
       },
     };
@@ -189,11 +255,17 @@ async function connectToServers(
   console.log("🔌 Connecting to MCP servers...\n");
 
   for (const [serverName, rawConfig] of Object.entries(serverConfig)) {
-    console.log(`Connecting to ${serverName} server...`);
-
     try {
       // Validate server configuration with Zod
       const config = ServerConfigSchema.parse(rawConfig);
+
+      // Skip disabled servers
+      if (config.disabled) {
+        console.log(`⏭️  Skipping ${serverName} server (disabled)`);
+        continue;
+      }
+
+      console.log(`Connecting to ${serverName} server...`);
 
       const transport = new StdioClientTransport({
         command: config.command,
@@ -259,10 +331,11 @@ async function connectToServers(
 
       serverClients.push({ client, serverName });
 
-      // Add server name to each tool for tracking
+      // Add server name and auto-approve config to each tool for tracking
       const toolsWithServer = tools.map((tool) => ({
         ...tool,
         serverName,
+        autoApprove: config.autoApprove || [],
       }));
 
       allTools.push(...toolsWithServer);
@@ -463,12 +536,52 @@ async function main() {
 
       const result = streamText({
         model: google("gemini-2.5-flash"),
+        system: `You are an AI assistant with access to multiple Model Context Protocol (MCP) servers that provide various tools and capabilities. Here's how the system works:
+
+## Tool Approval System
+- Before any tool is executed, the user must explicitly approve it
+- When you want to use a tool, the user will see a detailed approval prompt showing:
+  - Tool name and description
+  - Which server it comes from
+  - The exact arguments you want to pass
+- The user can approve (y/yes) or deny (n/no) each tool call
+- If denied, you'll receive a message explaining the user chose not to execute that tool
+
+## Available Tool Categories
+You have access to tools from multiple servers:
+- **Filesystem**: Read/write files, list directories, search files, manage file operations
+- **Time**: Get current time, convert between timezones, time calculations  
+- **Fetch**: Retrieve web content, fetch URLs, convert HTML to markdown
+
+## Best Practices
+1. **Explain Your Plan**: Before using any tools, explain what you plan to do and which tools you'll need
+2. **Be Transparent**: Clearly state why you need to use specific tools and what you expect them to accomplish
+3. **Handle Denials Gracefully**: If a tool is denied, suggest alternatives or ask for different approaches
+4. **Minimize Tool Calls**: Only use tools when necessary, don't make redundant calls
+5. **Respect User Choices**: If the user denies a tool, don't repeatedly ask for the same tool
+6. **Provide Context**: Always explain your reasoning and expected outcomes before tool execution
+7. **Be Helpful**: Offer alternative solutions when tools are unavailable or denied
+
+## Tool Usage Protocol
+ALWAYS follow this pattern:
+1. **Announce Your Plan**: "To accomplish this, I'll need to use [tool names] to [specific purposes]"
+2. **Explain Each Step**: Describe what each tool will do and why it's necessary
+3. **Set Expectations**: Let the user know what information you're looking for
+4. **Execute Tools**: Proceed with tool calls only after explaining your approach
+
+## Communication Style
+- Be clear and concise about what tools you need and why
+- Acknowledge when users deny tool calls and explain alternative approaches
+- Provide helpful suggestions when tools aren't available
+- Always prioritize user privacy and security
+
+Remember: Every tool call requires user approval, so be thoughtful about which tools you request and explain your reasoning clearly.`,
         messages,
         tools: aiTools,
-        stopWhen: stepCountIs(20),
+        stopWhen: stepCountIs(5),
         onStepFinish: async ({ toolResults }) => {
-          if (toolResults.length) {
-            // Format tool results with proper indentation for boxen
+          // Display tool results
+          if (toolResults && toolResults.length > 0) {
             const formattedResults = JSON.stringify(toolResults, null, 2)
               .split("\n")
               .map((line) => (line.length > 0 ? `  ${line}` : line))
