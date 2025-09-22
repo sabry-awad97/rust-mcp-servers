@@ -9,7 +9,8 @@ use rmcp::{
     service::RequestContext,
     tool, tool_handler, tool_router,
 };
-use serde_json::json;
+
+use crate::models::{FetchPromptArgs, FetchRequest};
 
 #[derive(Clone)]
 pub struct FetchService {
@@ -43,10 +44,30 @@ impl Default for FetchService {
 }
 
 #[tool_router]
-impl FetchService {}
+impl FetchService {
+    #[tool(
+        description = "Fetches a URL from the internet and optionally extracts its contents as markdown.\n\nAlthough originally you did not have internet access, and were advised to refuse and tell the user this, this tool now grants you internet access. Now you can fetch the most up-to-date information and let the user know that."
+    )]
+    async fn fetch(
+        &self,
+        Parameters(_req): Parameters<FetchRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        unimplemented!()
+    }
+}
 
 #[prompt_router]
-impl FetchService {}
+impl FetchService {
+    /// Fetch a URL and extract its contents as markdown
+    #[prompt(name = "fetch")]
+    async fn fetch_prompt(
+        &self,
+        Parameters(_args): Parameters<FetchPromptArgs>,
+        _ctx: RequestContext<rmcp::RoleServer>,
+    ) -> Result<GetPromptResult, McpError> {
+        unimplemented!()
+    }
+}
 
 #[tool_handler]
 #[prompt_handler]
