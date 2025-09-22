@@ -1,0 +1,19 @@
+{
+  "mcpServers": {
+    "time": {
+      "command": "mcp-server-time",
+      "args": [],
+      "env": {}
+    },
+    "filesystem": {
+      "command": "mcp-server-filesystem",
+      "args": ["."],
+      "env": {}
+    },
+    "fetch": {
+      "command": "mcp-server-fetch",
+      "args": [],
+      "env": {}
+    }
+  }
+}
