@@ -578,8 +578,64 @@ ALWAYS follow this pattern:
 Remember: Every tool call requires user approval, so be thoughtful about which tools you request and explain your reasoning clearly.`,
         messages,
         tools: aiTools,
-        stopWhen: stepCountIs(5),
-        onStepFinish: async ({ toolResults }) => {
+        stopWhen: stepCountIs(20),
+        prepareStep: async ({ stepNumber, messages }) => {
+          // Beautiful step logging
+          if (stepNumber > 1) {
+            console.log(
+              boxen(
+                rainbow(`🧠 AI Reasoning Step ${stepNumber}\n\n`) +
+                  pastel(
+                    "The AI is analyzing the conversation and deciding on next actions...\n"
+                  ) +
+                  cristal(`Messages in context: ${messages.length}\n`) +
+                  summer("Evaluating available tools and planning approach..."),
+                {
+                  padding: 1,
+                  margin: 1,
+                  borderStyle: "round",
+                  borderColor: "blue",
+                  dimBorder: true,
+                }
+              )
+            );
+          }
+
+          // Return default settings (no modifications)
+          return {};
+        },
+        onStepFinish: async ({ toolResults, finishReason }) => {
+          // Beautiful step completion logging
+          const finishReasonEmoji: Record<string, string> = {
+            stop: "✅",
+            "tool-calls": "🛠️",
+            length: "📏",
+            "content-filter": "🚫",
+            error: "❌",
+            other: "❓",
+            unknown: "❔",
+          };
+
+          console.log(
+            boxen(
+              rainbow(`📋 Step Completed\n\n`) +
+                summer(
+                  `Reason: ${finishReason} ${
+                    finishReasonEmoji[finishReason] || "❔"
+                  }\n`
+                ) +
+                (toolResults && toolResults.length > 0
+                  ? pastel(`Tools executed: ${toolResults.length}`)
+                  : pastel("No tools executed")),
+              {
+                padding: 1,
+                margin: 1,
+                borderStyle: "round",
+                borderColor: "magenta",
+                dimBorder: true,
+              }
+            )
+          );
           // Display tool results
           if (toolResults && toolResults.length > 0) {
             const formattedResults = JSON.stringify(toolResults, null, 2)
