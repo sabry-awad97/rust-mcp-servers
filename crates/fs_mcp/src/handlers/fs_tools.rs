@@ -15,8 +15,9 @@ use crate::{
     errors::{FileSystemMcpError, ToolResult},
     models::requests::{
         CreateDirectoryRequest, DirectoryTreeRequest, EditFileRequest, GetFileInfoRequest,
-        ListDirectoryRequest, ListDirectoryWithSizesRequest, MoveFileRequest, ReadMediaFileRequest,
-        ReadMultipleFilesRequest, ReadTextFileRequest, SearchFilesRequest, WriteFileRequest,
+        ListAllowedDirectoriesRequest, ListDirectoryRequest, ListDirectoryWithSizesRequest,
+        MoveFileRequest, ReadMediaFileRequest, ReadMultipleFilesRequest, ReadTextFileRequest,
+        SearchFilesRequest, WriteFileRequest,
     },
     service::validation::{Validate, validate_path},
 };
@@ -451,7 +452,10 @@ impl FileSystemService {
     }
 
     #[tool(description = "Returns the list of directories that this server is allowed to access")]
-    async fn list_allowed_directories(&self) -> ToolResult {
+    async fn list_allowed_directories(
+        &self,
+        Parameters(_req): Parameters<ListAllowedDirectoriesRequest>,
+    ) -> ToolResult {
         let directories: Vec<String> = self
             .allowed_directories
             .iter()

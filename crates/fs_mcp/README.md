@@ -33,20 +33,20 @@ cargo install mcp-server-filesystem
 
 ```bash
 # Start the MCP server with allowed directories (communicates via stdio)
-mcp-server-filesystem --allowed-dir /path/to/allowed/directory
+mcp-server-filesystem /path/to/allowed/directory
 
 # Allow multiple directories
-mcp-server-filesystem --allowed-dir /home/user/projects --allowed-dir /tmp/workspace
+mcp-server-filesystem /home/user/projects /tmp/workspace
 
 # Enable debug logging
-mcp-server-filesystem --allowed-dir /path/to/dir --log-level debug
+mcp-server-filesystem /path/to/dir --log-level debug
 ```
 
 ### Test with MCP Inspector
 
 ```bash
 # Install and run the MCP Inspector to test the server
-npx @modelcontextprotocol/inspector mcp-server-filesystem --allowed-dir /path/to/test/dir
+npx @modelcontextprotocol/inspector mcp-server-filesystem /path/to/test/dir
 ```
 
 ### Use with Claude Desktop
@@ -58,12 +58,7 @@ Add to your Claude Desktop MCP configuration:
   "mcpServers": {
     "filesystem": {
       "command": "mcp-server-filesystem",
-      "args": [
-        "--allowed-dir",
-        "/path/to/your/projects",
-        "--allowed-dir",
-        "/path/to/documents"
-      ]
+      "args": ["."]
     }
   }
 }
@@ -432,7 +427,7 @@ SECURITY INFORMATION:
 mcp-server-filesystem [OPTIONS]
 
 Options:
-  -a, --allowed-dir <PATH>    Add an allowed directory (can be used multiple times)
+  -a, <PATH>    Add an allowed directory (can be used multiple times)
   -l, --log-level <LEVEL>     Set logging level [default: info] [possible values: trace, debug, info, warn, error]
   -f, --log-format <FORMAT>   Set log format [default: pretty] [possible values: pretty, json, compact]
       --help                  Print help information
@@ -471,7 +466,7 @@ Once configured, you can ask Claude:
 
 ```bash
 # Test the server interactively
-npx @modelcontextprotocol/inspector mcp-server-filesystem --allowed-dir /path/to/test
+npx @modelcontextprotocol/inspector mcp-server-filesystem /path/to/test
 
 # Try these operations:
 # 1. Use read_text_file to examine files
@@ -485,7 +480,7 @@ npx @modelcontextprotocol/inspector mcp-server-filesystem --allowed-dir /path/to
 
 ```bash
 # Use MCP Inspector for interactive testing
-npx @modelcontextprotocol/inspector mcp-server-filesystem --allowed-dir /home/user/projects
+npx @modelcontextprotocol/inspector mcp-server-filesystem /home/user/projects
 
 # Test specific operations:
 # - File reading: read_text_file, read_multiple_files

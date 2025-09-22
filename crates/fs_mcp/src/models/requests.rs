@@ -462,3 +462,16 @@ impl Validate for GetFileInfoRequest {
         Ok(())
     }
 }
+
+/// Request to list allowed directories (no parameters needed)
+#[derive(Debug, Deserialize, schemars::JsonSchema, Getters)]
+pub struct ListAllowedDirectoriesRequest {
+    // Empty struct - no parameters needed
+}
+
+impl Validate for ListAllowedDirectoriesRequest {
+    fn validate(&self) -> FileSystemMcpResult<()> {
+        // No validation needed for empty request
+        Ok(())
+    }
+}
