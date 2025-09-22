@@ -49,7 +49,11 @@ impl FetchServer {
 
         let (content, prefix) = self
             .service
-            .fetch_url(req.url(), req.raw().to_owned())
+            .fetch_url(
+                req.url(),
+                self.service.get_user_agent_autonomous(),
+                req.raw().to_owned(),
+            )
             .await?;
 
         let original_length = content.len();
@@ -87,10 +91,34 @@ impl FetchServer {
     #[prompt(name = "fetch")]
     async fn fetch_prompt(
         &self,
-        Parameters(_args): Parameters<FetchPromptArgs>,
+        Parameters(args): Parameters<FetchPromptArgs>,
         _ctx: RequestContext<rmcp::RoleServer>,
     ) -> Result<GetPromptResult, McpError> {
-        unimplemented!()
+        args.validate()?;
+        match self
+            .service
+            .fetch_url(args.url(), self.service.get_user_agent_manual(), false)
+            .await
+            .map_err(|e| -> McpError { e.into() })
+        {
+            Ok((content, prefix)) => {
+                let full_content = format!("{}{}", prefix, content);
+                Ok(GetPromptResult {
+                    description: Some(format!("Contents of {}", args.url())),
+                    messages: vec![PromptMessage {
+                        role: PromptMessageRole::User,
+                        content: PromptMessageContent::text(full_content),
+                    }],
+                })
+            }
+            Err(e) => Ok(GetPromptResult {
+                description: Some(format!("Failed to fetch {}", args.url())),
+                messages: vec![PromptMessage {
+                    role: PromptMessageRole::User,
+                    content: PromptMessageContent::text(format!("Error: {}", e)),
+                }],
+            }),
+        }
     }
 }
 

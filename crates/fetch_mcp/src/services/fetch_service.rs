@@ -30,13 +30,13 @@ impl FetchService {
         }
     }
 
-    fn get_user_agent_autonomous(&self) -> &str {
+    pub fn get_user_agent_autonomous(&self) -> &str {
         self.custom_user_agent
             .as_deref()
             .unwrap_or(DEFAULT_USER_AGENT_AUTONOMOUS)
     }
 
-    fn get_user_agent_manual(&self) -> &str {
+    pub fn get_user_agent_manual(&self) -> &str {
         self.custom_user_agent
             .as_deref()
             .unwrap_or(DEFAULT_USER_AGENT_MANUAL)
@@ -137,12 +137,13 @@ impl FetchService {
     pub async fn fetch_url(
         &self,
         url: &str,
+        user_agent: &str,
         force_raw: bool,
     ) -> Result<(String, String), FetchServerError> {
         let client = build_client(self.proxy_url.as_ref())?;
         let response = client
             .get(url)
-            .header("User-Agent", self.get_user_agent_autonomous())
+            .header("User-Agent", user_agent)
             .send()
             .await
             .map_err(|e| FetchServerError::FetchError {

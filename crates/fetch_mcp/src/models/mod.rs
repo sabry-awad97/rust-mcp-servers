@@ -58,3 +58,15 @@ pub struct FetchPromptArgs {
     /// URL to fetch
     url: String,
 }
+
+impl Validate for FetchPromptArgs {
+    fn validate(&self) -> Result<(), FetchServerError> {
+        if self.url.is_empty() {
+            return Err(FetchServerError::InvalidParams {
+                message: "URL is required".to_string(),
+            });
+        }
+
+        Ok(())
+    }
+}
