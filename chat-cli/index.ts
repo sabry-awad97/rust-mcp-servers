@@ -579,16 +579,37 @@ Remember: Every tool call requires user approval, so be thoughtful about which t
         messages,
         tools: aiTools,
         stopWhen: stepCountIs(20),
-        prepareStep: async ({ stepNumber, messages }) => {
+        prepareStep: async ({ steps, stepNumber, messages }) => {
           // Beautiful step logging
           if (stepNumber > 1) {
+            // Analyze previous steps
+            const previousStep = steps[steps.length - 1];
+            const totalToolsExecuted = steps.reduce(
+              (total, step) => total + (step.toolResults?.length || 0),
+              0
+            );
+
+            let stepSummary = "";
+            if (previousStep) {
+              const toolCount = previousStep.toolResults?.length || 0;
+              const lastReason = previousStep.finishReason;
+              stepSummary = `\n${fruit(
+                `Previous step: ${lastReason} (${toolCount} tools executed)`
+              )}\n`;
+            }
+
             console.log(
               boxen(
                 rainbow(`🧠 AI Reasoning Step ${stepNumber}\n\n`) +
                   pastel(
                     "The AI is analyzing the conversation and deciding on next actions...\n"
                   ) +
+                  stepSummary +
                   cristal(`Messages in context: ${messages.length}\n`) +
+                  summer(`Total steps completed: ${steps.length}\n`) +
+                  pastel(
+                    `Total tools executed so far: ${totalToolsExecuted}\n`
+                  ) +
                   summer("Evaluating available tools and planning approach..."),
                 {
                   padding: 1,
