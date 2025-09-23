@@ -12,6 +12,7 @@ import {
 } from "ai";
 import boxen from "boxen";
 import { Command } from "commander";
+// Using readline for interactive menus instead of enquirer for simplicity
 import fs from "fs";
 import { cristal, fruit, pastel, rainbow, summer } from "gradient-string";
 import * as readline from "node:readline/promises";
@@ -23,6 +24,156 @@ const terminal = readline.createInterface({
 });
 
 const messages: ModelMessage[] = [];
+
+// Interactive menu types and functions
+interface ToolActionResult {
+  action: "approve" | "edit" | "deny" | "details";
+  editedArgs?: Record<string, any>;
+}
+
+async function showToolDetailsViewer(tool: EnhancedTool): Promise<void> {
+  const details = [
+    `${rainbow("🔧 Tool Details")}
+`,
+    `${cristal("Name:")} ${tool.originalName}`,
+    `${cristal("Server:")} ${tool.serverName}`,
+    `${cristal("Description:")} ${
+      tool.description || "No description available"
+    }`,
+    `${cristal("Auto-approved:")} ${
+      tool.autoApprove.includes(tool.originalName) ? "✅ Yes" : "❌ No"
+    }`,
+    `\n${summer("Input Schema:")}`,
+    JSON.stringify(tool.inputSchema, null, 2),
+  ].join("\n");
+
+  console.log(
+    boxen(details, {
+      padding: 1,
+      margin: 1,
+      borderStyle: "round",
+      borderColor: "blue",
+    })
+  );
+
+  await terminal.question(pastel("Press Enter to continue..."));
+}
+
+async function editToolArguments(
+  args: Record<string, any>
+): Promise<Record<string, any>> {
+  console.log(
+    boxen(
+      rainbow("📝 Edit Tool Arguments\n\n") +
+        "Current arguments:\n" +
+        JSON.stringify(args, null, 2) +
+        "\n\nEnter new JSON or press Enter to keep current:",
+      {
+        padding: 1,
+        margin: 1,
+        borderStyle: "round",
+        borderColor: "yellow",
+      }
+    )
+  );
+
+  const newArgsString = await terminal.question(
+    summer("New arguments (JSON): ")
+  );
+
+  try {
+    if (!newArgsString.trim()) {
+      return args; // Keep original if empty
+    }
+
+    const newArgs = JSON.parse(newArgsString);
+    console.log(
+      boxen(
+        rainbow("✅ Arguments Updated\n\n") + JSON.stringify(newArgs, null, 2),
+        {
+          padding: 1,
+          margin: 1,
+          borderStyle: "round",
+          borderColor: "green",
+        }
+      )
+    );
+    return newArgs;
+  } catch (error) {
+    console.log(
+      boxen(fruit("❌ Invalid JSON format\n\n") + "Using original arguments.", {
+        padding: 1,
+        margin: 1,
+        borderStyle: "round",
+        borderColor: "red",
+      })
+    );
+    return args;
+  }
+}
+
+async function showInteractiveToolMenu(
+  tool: EnhancedTool,
+  args: Record<string, any>
+): Promise<ToolActionResult> {
+  while (true) {
+    console.log(
+      boxen(
+        rainbow("🛠️  Interactive Tool Menu\n\n") +
+          cristal("Choose an action:\n") +
+          summer("1. ✅ Approve & Execute\n") +
+          summer("2. 📝 Edit Arguments\n") +
+          summer("3. 🔍 View Tool Details\n") +
+          summer("4. ❌ Deny\n"),
+        {
+          padding: 1,
+          margin: 1,
+          borderStyle: "round",
+          borderColor: "cyan",
+        }
+      )
+    );
+
+    try {
+      const choice = await terminal.question(
+        fruit("Enter your choice (1-4): ")
+      );
+
+      switch (choice.trim()) {
+        case "1":
+        case "approve":
+        case "a":
+          return { action: "approve" };
+
+        case "2":
+        case "edit":
+        case "e": {
+          const editedArgs = await editToolArguments(args);
+          return { action: "edit", editedArgs };
+        }
+
+        case "3":
+        case "details":
+        case "d":
+          await showToolDetailsViewer(tool);
+          // Continue the loop to show menu again
+          break;
+
+        case "4":
+        case "deny":
+        case "n":
+          return { action: "deny" };
+
+        default:
+          console.log(fruit("❌ Invalid choice. Please enter 1-4."));
+          break;
+      }
+    } catch (error) {
+      // User cancelled (Ctrl+C), treat as deny
+      return { action: "deny" };
+    }
+  }
+}
 
 // Zod schemas for validation
 const ServerConfigSchema = z.object({
@@ -188,14 +339,26 @@ function mapMcpToolsToAiTools(
           );
         }
 
-        // Ask for user approval (skip if auto-approved)
+        // Handle tool approval (skip if auto-approved)
         let approved = isAutoApproved;
+        let finalArgs = args;
+
         if (!isAutoApproved) {
-          const approval = await terminal.question(
-            `${fruit("⚠️  Approve tool call?")} (y/n): `
-          );
-          approved =
-            approval.toLowerCase() === "y" || approval.toLowerCase() === "yes";
+          const menuResult = await showInteractiveToolMenu(tool, args);
+
+          switch (menuResult.action) {
+            case "approve":
+              approved = true;
+              break;
+            case "edit":
+              approved = true;
+              finalArgs = menuResult.editedArgs || args;
+              break;
+            case "deny":
+            default:
+              approved = false;
+              break;
+          }
         }
 
         if (approved) {
@@ -203,7 +366,7 @@ function mapMcpToolsToAiTools(
             console.log(`Executing ${tool.originalName}...`);
             const result = await serverClient.client.callTool({
               name: tool.originalName,
-              arguments: args,
+              arguments: finalArgs,
             });
             console.log(`✓ ${tool.originalName} completed`);
 

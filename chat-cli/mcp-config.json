@@ -20,6 +20,13 @@
       "env": {},
       "disabled": false,
       "autoApprove": []
+    },
+    "playwright": {
+      "command": "npx",
+      "args": ["@playwright/mcp@latest", "--headless"],
+      "env": {},
+      "disabled": false,
+      "autoApprove": []
     }
   }
 }
